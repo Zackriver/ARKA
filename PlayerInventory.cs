@@ -68,6 +68,10 @@ public class PlayerInventory : MonoBehaviour
     
     private void Awake()
     {
+        if (transform.parent != null)
+        {
+             transform.SetParent(null);
+        }
         if (Instance == null)
         {
             Instance = this;

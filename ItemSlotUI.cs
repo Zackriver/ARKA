@@ -9,7 +9,7 @@ public class ItemSlotUI : MonoBehaviour, IPointerClickHandler
     public Image iconImage;
     public TextMeshProUGUI quantityText;
     public Image rarityBorder;
-    public GameObject dragPrefab; // Prefab to spawn when dragging
+    public GameObject dragPrefab;
     
     [Header("Data")]
     public ItemData itemData;
@@ -37,7 +37,6 @@ public class ItemSlotUI : MonoBehaviour, IPointerClickHandler
     {
         if (itemData != null && quantity > 0)
         {
-            // Show icon
             if (iconImage != null)
             {
                 iconImage.sprite = itemData.icon;
@@ -45,14 +44,12 @@ public class ItemSlotUI : MonoBehaviour, IPointerClickHandler
                 iconImage.enabled = true;
             }
             
-            // Show quantity
             if (quantityText != null)
             {
                 quantityText.text = quantity.ToString();
                 quantityText.enabled = true;
             }
             
-            // Show rarity border
             if (rarityBorder != null)
             {
                 rarityBorder.color = itemData.GetRarityColor();
@@ -61,7 +58,6 @@ public class ItemSlotUI : MonoBehaviour, IPointerClickHandler
         }
         else
         {
-            // Empty slot
             if (iconImage != null) iconImage.enabled = false;
             if (quantityText != null) quantityText.enabled = false;
             if (rarityBorder != null) rarityBorder.enabled = false;
@@ -72,24 +68,28 @@ public class ItemSlotUI : MonoBehaviour, IPointerClickHandler
     {
         if (!isDraggable || itemData == null || quantity <= 0) return;
         
-        // Create drag copy
         if (dragPrefab != null)
         {
             GameObject dragCopy = Instantiate(dragPrefab, canvas.transform);
             
-            // Position at mouse
             RectTransform dragRect = dragCopy.GetComponent<RectTransform>();
-            dragRect.position = eventData.position;
+            if (dragRect != null)
+            {
+                dragRect.position = eventData.position;
+            }
             
-            // Setup drag handler
             DragDropHandler dragHandler = dragCopy.GetComponent<DragDropHandler>();
             if (dragHandler != null)
             {
                 dragHandler.itemData = itemData;
-                dragHandler.iconImage.sprite = itemData.icon;
-                dragHandler.iconImage.color = itemData.itemColor;
                 
-                // Start drag immediately
+                // ✅ FIXED: Added null check (my mistake)
+                if (dragHandler.iconImage != null)
+                {
+                    dragHandler.iconImage.sprite = itemData.icon;
+                    dragHandler.iconImage.color = itemData.itemColor;
+                }
+                
                 dragHandler.OnBeginDrag(eventData);
             }
         }

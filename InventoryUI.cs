@@ -9,7 +9,8 @@ public class InventoryUI : MonoBehaviour
     [Header("Item Grid")]
     public GameObject itemSlotPrefab;
     public Transform itemsGridContainer;
-    public GameObject dragItemPrefab; // For drag & drop
+    public GameObject dragItemPrefab;
+    public List<ItemData> allItemsDatabase; // ✅ ADDED: Assign all 15 items here
     
     [Header("Crafting")]
     public CraftingSlotUI[] craftingSlots = new CraftingSlotUI[4];
@@ -34,7 +35,6 @@ public class InventoryUI : MonoBehaviour
         PopulateItemGrid();
         PopulatePowerUpsList();
         
-        // Subscribe to events
         if (CraftingSystem.Instance != null)
         {
             CraftingSystem.Instance.OnSlotChanged += OnCraftingSlotChanged;
@@ -47,7 +47,6 @@ public class InventoryUI : MonoBehaviour
             PlayerInventory.Instance.OnInventoryChanged += RefreshDisplay;
         }
         
-        // Setup craft button
         if (craftButton != null)
         {
             craftButton.onClick.AddListener(OnCraftButtonClicked);
@@ -58,7 +57,6 @@ public class InventoryUI : MonoBehaviour
     
     private void OnDestroy()
     {
-        // Unsubscribe from events
         if (CraftingSystem.Instance != null)
         {
             CraftingSystem.Instance.OnSlotChanged -= OnCraftingSlotChanged;
@@ -85,7 +83,6 @@ public class InventoryUI : MonoBehaviour
     
     private void PopulateItemGrid()
     {
-        // Clear existing
         foreach (var slot in itemSlots)
         {
             if (slot != null) Destroy(slot.gameObject);
@@ -95,19 +92,16 @@ public class InventoryUI : MonoBehaviour
         if (PlayerInventory.Instance == null || itemSlotPrefab == null || itemsGridContainer == null)
             return;
         
-        // Create slot for each item type
         foreach (System.Enum itemType in System.Enum.GetValues(typeof(ItemType)))
         {
             ItemType type = (ItemType)itemType;
             int quantity = PlayerInventory.Instance.GetItemCount(type);
             
-            // Create slot
             GameObject slotObj = Instantiate(itemSlotPrefab, itemsGridContainer);
             ItemSlotUI slotUI = slotObj.GetComponent<ItemSlotUI>();
             
             if (slotUI != null)
             {
-                // Get item data from CraftingSystem (it has all items reference)
                 ItemData itemData = GetItemDataByType(type);
                 
                 slotUI.SetItem(itemData, quantity);
@@ -119,7 +113,6 @@ public class InventoryUI : MonoBehaviour
     
     private void PopulatePowerUpsList()
     {
-        // Clear existing
         foreach (var entry in powerUpEntries)
         {
             if (entry != null) Destroy(entry.gameObject);
@@ -129,7 +122,6 @@ public class InventoryUI : MonoBehaviour
         if (PlayerInventory.Instance == null || powerUpEntryPrefab == null || powerUpsListContainer == null)
             return;
         
-        // Get all unlocked power-ups
         foreach (var progress in PlayerInventory.Instance.powerUpProgress)
         {
             if (progress.unlocked)
@@ -153,7 +145,6 @@ public class InventoryUI : MonoBehaviour
     
     private void RefreshDisplay()
     {
-        // Update item quantities
         foreach (var slot in itemSlots)
         {
             if (slot != null && slot.itemData != null)
@@ -163,7 +154,6 @@ public class InventoryUI : MonoBehaviour
             }
         }
         
-        // Refresh power-ups list
         PopulatePowerUpsList();
     }
     
@@ -180,7 +170,6 @@ public class InventoryUI : MonoBehaviour
         
         if (matchingPowerUp != null)
         {
-            // Show what will be crafted
             if (resultIconImage != null)
             {
                 resultIconImage.sprite = matchingPowerUp.icon;
@@ -208,7 +197,6 @@ public class InventoryUI : MonoBehaviour
         }
         else
         {
-            // No match or incomplete recipe
             if (resultIconImage != null)
             {
                 resultIconImage.enabled = false;
@@ -239,7 +227,6 @@ public class InventoryUI : MonoBehaviour
     {
         ShowFeedback($"Crafted {powerUp.powerUpName} Lv.{newLevel}!", Color.green);
         
-        // Clear crafting slots
         foreach (var slot in craftingSlots)
         {
             if (slot != null) slot.ClearSlot();
@@ -278,28 +265,39 @@ public class InventoryUI : MonoBehaviour
         }
     }
     
+    // ✅ FIXED: Better item lookup (my mistake)
     private ItemData GetItemDataByType(ItemType type)
     {
-        // This is a helper to get ItemData from ItemDropper's list
-        // You might need to adjust based on your setup
-        
-        if (ItemDropper.Instance != null)
+        // Try allItemsDatabase first (assign in Inspector)
+        if (allItemsDatabase != null)
         {
-            foreach (var item in ItemDropper.Instance.allItems)
+            foreach (var item in allItemsDatabase)
             {
-                if (item.itemType == type)
+                if (item != null && item.itemType == type)
                 {
                     return item;
                 }
             }
         }
         
+        // Fallback: Try ItemDropper
+        if (ItemDropper.Instance != null && ItemDropper.Instance.allItems != null)
+        {
+            foreach (var item in ItemDropper.Instance.allItems)
+            {
+                if (item != null && item.itemType == type)
+                {
+                    return item;
+                }
+            }
+        }
+        
+        Debug.LogWarning($"[InventoryUI] ItemData not found for type: {type}");
         return null;
     }
     
     public void OnBackButtonClicked()
     {
-        // Return to menu
         SceneManager.LoadScene("Menu");
     }
 }

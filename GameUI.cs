@@ -10,17 +10,20 @@ public class GameUI : MonoBehaviour
     public GameObject gameOverScreen;
     public Text gameOverScoreText;
     public GameObject winScreen;
+    public GameObject pauseScreen;
 
     [Header("Mobile Settings")]
     public bool autoConfigureCanvas = true;
     public Vector2 referenceResolution = new Vector2(1920, 1080);
     [Range(0f, 1f)]
-    public float screenMatchMode = 0.5f; // 0 = width, 1 = height, 0.5 = balanced
+    public float screenMatchMode = 0.5f;
     
     [Header("Font Sizes")]
     public int scoreFontSize = 48;
     public int livesFontSize = 48;
     public int gameOverFontSize = 64;
+
+    private bool isPaused = false;
 
     void Awake()
     {
@@ -30,6 +33,19 @@ public class GameUI : MonoBehaviour
         }
         
         SetupFontSizes();
+    }
+
+    void Start()
+    {
+        if (manager == null)
+        {
+            manager = FindFirstObjectByType<GameManager>();
+        }
+        
+        if (pauseScreen != null)
+        {
+            pauseScreen.SetActive(false);
+        }
     }
 
     void ConfigureCanvasForMobile()
@@ -48,7 +64,6 @@ public class GameUI : MonoBehaviour
                 scaler = canvas.gameObject.AddComponent<CanvasScaler>();
             }
             
-            // Set to Scale With Screen Size
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = referenceResolution;
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
@@ -86,38 +101,110 @@ public class GameUI : MonoBehaviour
 
     void Update()
     {
+        if (manager == null) return;
+        
         if (!manager.gameOver && !manager.wonGame)
         {
-            scoreText.text = "<b>SCORE</b>\n" + manager.score;
-            livesText.text = "<b>LIVES</b>: " + manager.lives;
+            if (scoreText != null)
+            {
+                scoreText.text = "<b>SCORE</b>\n" + manager.score;
+            }
+            
+            if (livesText != null)
+            {
+                livesText.text = "<b>LIVES</b>: " + manager.lives;
+            }
         }
         else
         {
-            scoreText.text = "";
-            livesText.text = "";
+            if (scoreText != null) scoreText.text = "";
+            if (livesText != null) livesText.text = "";
         }
     }
 
+    // ==================== PAUSE SYSTEM ====================
+    
+    public void PauseGame()
+    {
+        isPaused = true;
+        Time.timeScale = 0f;
+        
+        if (pauseScreen != null)
+        {
+            pauseScreen.SetActive(true);
+        }
+    }
+    
+    public void ResumeGame()
+    {
+        isPaused = false;
+        Time.timeScale = 1f;
+        
+        if (pauseScreen != null)
+        {
+            pauseScreen.SetActive(false);
+        }
+    }
+    
+    // ==================== BUTTONS ====================
+    
+    public void EndGame()
+    {
+        Time.timeScale = 1f;
+        SceneManager.LoadScene("Menu");
+    }
+    
+    public void PauseButton()
+    {
+        if (isPaused)
+        {
+            ResumeGame();
+        }
+        else
+        {
+            PauseGame();
+        }
+    }
+
+    // ==================== GAME STATE ====================
+
     public void SetGameOver()
     {
-        gameOverScreen.SetActive(true);
-        gameOverScoreText.text = "<b>YOU ACHIEVED A SCORE OF</b>\n" + manager.score;
+        if (gameOverScreen != null)
+        {
+            gameOverScreen.SetActive(true);
+        }
+        
+        if (gameOverScoreText != null && manager != null)
+        {
+            gameOverScoreText.text = "<b>YOU ACHIEVED A SCORE OF</b>\n" + manager.score;
+        }
     }
 
     public void SetWin()
     {
-        winScreen.SetActive(true);
+        if (winScreen != null)
+        {
+            winScreen.SetActive(true);
+        }
     }
 
     public void TryAgainButton()
     {
-        gameOverScreen.SetActive(false);
-        winScreen.SetActive(false);
-        manager.StartGame();
+        Time.timeScale = 1f;
+        
+        if (gameOverScreen != null) gameOverScreen.SetActive(false);
+        if (winScreen != null) winScreen.SetActive(false);
+        
+        if (manager != null)
+        {
+            manager.StartGame();
+        }
     }
 
     public void MenuButton()
     {
-        SceneManager.LoadScene(0);
+        Time.timeScale = 1f;
+        SceneManager.LoadScene("Menu");
     }
 }
