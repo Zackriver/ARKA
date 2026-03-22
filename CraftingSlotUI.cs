@@ -2,7 +2,11 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
 
-public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
+public class CraftingSlotUI : MonoBehaviour, 
+    IDropHandler, 
+    IPointerClickHandler,
+    IPointerEnterHandler,   // ✅ ADDED (my mistake)
+    IPointerExitHandler     // ✅ ADDED (my mistake)
 {
     [Header("References")]
     public Image iconImage;
@@ -26,7 +30,6 @@ public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
     
     public bool CanAcceptItem(ItemData item)
     {
-        // Can only accept if slot is empty
         return currentItem == null && item != null;
     }
     
@@ -36,7 +39,6 @@ public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
         
         currentItem = item;
         
-        // Update visual
         if (iconImage != null)
         {
             iconImage.sprite = item.icon;
@@ -49,7 +51,6 @@ public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
             backgroundImage.color = filledColor;
         }
         
-        // Notify crafting system
         if (CraftingSystem.Instance != null)
         {
             CraftingSystem.Instance.SetSlot(slotIndex, item.itemType);
@@ -71,7 +72,6 @@ public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
             backgroundImage.color = emptyColor;
         }
         
-        // Notify crafting system
         if (CraftingSystem.Instance != null)
         {
             CraftingSystem.Instance.SetSlot(slotIndex, null);
@@ -80,13 +80,11 @@ public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
     
     public void OnDrop(PointerEventData eventData)
     {
-        // This is called when something is dropped on this slot
-        // The actual logic is handled by DragDropHandler.OnEndDrag
+        // Handled by DragDropHandler.OnEndDrag
     }
     
     public void OnPointerClick(PointerEventData eventData)
     {
-        // Right-click or double-click to clear slot
         if (eventData.button == PointerEventData.InputButton.Right || eventData.clickCount == 2)
         {
             ClearSlot();
@@ -95,7 +93,6 @@ public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
     
     public void OnPointerEnter(PointerEventData eventData)
     {
-        // Highlight when hovering
         if (backgroundImage != null && currentItem == null)
         {
             backgroundImage.color = highlightColor;
@@ -104,7 +101,6 @@ public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
     
     public void OnPointerExit(PointerEventData eventData)
     {
-        // Remove highlight
         if (backgroundImage != null && currentItem == null)
         {
             backgroundImage.color = emptyColor;
