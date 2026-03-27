@@ -34,21 +34,44 @@ public enum ItemType
     // Legendary
     LaserLens,
     ExplosivePowder,
-    PulseCrystal
+    PulseCrystal,
+
+    // Power-Ups (The Results of Crafting)
+    MagnetPaddle,
+    LaserPaddle,
+    ShieldPaddle,
+    MultiBallCore
 }
 
 [CreateAssetMenu(fileName = "NewItem", menuName = "Breakout/Item Data")]
 public class ItemData : ScriptableObject
 {
+    [Header("Identity")]
     public string itemName;
     public ItemType itemType;
     public ItemRarity rarity;
+
+    [Header("Visuals")]
     public Sprite icon;
     public Color itemColor = Color.white;
     
     [TextArea(2, 4)]
     public string description;
-    
+
+    [Header("Classification")]
+    public ItemCategory category;
+
+    public enum ItemCategory
+    {
+        Material,  // For Shards, Orbs, Chips, etc. (15 slots)
+        PowerUp    // For Paddles and special cores (Bottom-right slots)
+    }
+
+    [Header("Settings")]
+    public int maxStackSize = 99;
+
+    // --- Helper Methods ---
+
     public float GetDropChance()
     {
         switch (rarity)

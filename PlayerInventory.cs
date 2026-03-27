@@ -55,10 +55,8 @@ public class PlayerInventory : MonoBehaviour
     public int playerLevel = 1;
     
     [Header("Settings")]
-    [Tooltip("Level required to use multiple power-ups at once")]
     public int multiPowerUpUnlockLevel = 50;
     
-    // Events
     public event Action<ItemType, int> OnItemAdded;
     public event Action<ItemType, int> OnItemRemoved;
     public event Action<PowerUpType, int> OnPowerUpLevelUp;
@@ -68,13 +66,15 @@ public class PlayerInventory : MonoBehaviour
     
     private void Awake()
     {
-        if (transform.parent != null)
-        {
-             transform.SetParent(null);
-        }
         if (Instance == null)
         {
             Instance = this;
+            
+            if (transform.parent != null)
+            {
+                transform.SetParent(null);
+            }
+            
             DontDestroyOnLoad(gameObject);
             LoadInventory();
             InitializePowerUpProgress();
@@ -87,7 +87,6 @@ public class PlayerInventory : MonoBehaviour
     
     private void InitializePowerUpProgress()
     {
-        // Initialize progress for all power-up types if not exists
         foreach (PowerUpType type in Enum.GetValues(typeof(PowerUpType)))
         {
             if (!HasPowerUpProgress(type))
@@ -311,15 +310,28 @@ public class PlayerInventory : MonoBehaviour
         OnInventoryChanged?.Invoke();
     }
     
-    // ==================== DEBUG ====================
+    // ==================== DEBUG / TESTING ====================
     
     [ContextMenu("Add Test Items")]
     public void AddTestItems()
     {
-        foreach (ItemType type in Enum.GetValues(typeof(ItemType)))
-        {
-            AddItem(type, 10);
-        }
+        AddItem(ItemType.MetalShard, 5);
+        AddItem(ItemType.PlasmaOrb, 5);
+        AddItem(ItemType.TechChip, 5);
+        AddItem(ItemType.EnergyCore, 3);
+        AddItem(ItemType.PowerCell, 3);
+        AddItem(ItemType.CircuitBoard, 3);
+        AddItem(ItemType.MagnetPiece, 2);
+        AddItem(ItemType.ShieldFragment, 2);
+        AddItem(ItemType.SpeedGem, 2);
+        AddItem(ItemType.FireEssence, 1);
+        AddItem(ItemType.AcidVial, 1);
+        AddItem(ItemType.GravityStone, 1);
+        AddItem(ItemType.LaserLens, 1);
+        AddItem(ItemType.ExplosivePowder, 1);
+        AddItem(ItemType.PulseCrystal, 1);
+        
+        Debug.Log("[PlayerInventory] Test items added!");
     }
     
     [ContextMenu("Clear All Items")]
@@ -328,5 +340,6 @@ public class PlayerInventory : MonoBehaviour
         items.Clear();
         SaveInventory();
         OnInventoryChanged?.Invoke();
+        Debug.Log("[PlayerInventory] All items cleared!");
     }
 }
