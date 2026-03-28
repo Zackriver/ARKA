@@ -1,428 +1,765 @@
-﻿using UnityEngine;
+﻿using System.Collections;
 using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.SceneManagement;
 
+/// <summary>
+/// Complete game controller with state machine, event system, and visual level editor support
+/// Place in: Assets/Scripts/Core/GameManager.cs
+/// </summary>
+[DefaultExecutionOrder(-100)]
 public class GameManager : MonoBehaviour
 {
-    public static GameManager Instance { get; private set; }
-
-    [Header("Game State")]
-    public int score;
-    public int lives = 10;
-    public bool gameOver;
-    public bool wonGame;
-
-    [Header("Brick Settings")]
-    [Tooltip("Horizontal gap between bricks (columns)")]
-    public float brickGapX = 0.1f;
-    [Tooltip("Vertical gap between bricks (rows)")]
-    public float brickGapY = 0.1f;
-
-    [Header("Brick Frame")]
-    public bool showBrickFrame = true;
-    [Range(0.02f, 0.3f)]
-    public float frameThickness = 0.1f;
-    public Color frameColor = new Color(0.3f, 0.3f, 0.35f, 1f);
-    [Tooltip("Add metallic highlight effect")]
-    public bool metallicEffect = true;
-    [Range(0f, 1f)]
-    public float highlightStrength = 0.4f;
-    [Range(0f, 1f)]
-    public float shadowStrength = 0.5f;
-
-    [Header("Brick Shapes")]
-    public List<BrickShape> availableShapes = new List<BrickShape>();
-
-    [Header("Level Playlist")]
-    public List<LevelData> allLevels = new List<LevelData>();
-    public int currentLevelIndex = 0;
-    public LevelData currentLevelData;
-
-    [Header("References")]
-    public GameObject paddle;
-    public GameObject ball;
-    public GameUI gameUI;
-    public GameObject brickPrefab;
-    public List<GameObject> activeBricks = new List<GameObject>();
-
-    [Header("Placement Bounds")]
-    public Vector2 boundsCenter = new Vector2(0, 2f);
-    public Vector2 boundsSize = new Vector2(14f, 6f);
-
-    [Header("Audio")]
-    public AudioSource audioSource;
-    public AudioClip toughSound;
-    public AudioClip breakSound;
-
-    // Cached white sprite for frame elements
-    private Sprite _whiteSprite;
-    private Sprite WhiteSprite
+    // ═══════════════════════════════════════════════════════════════
+    // SINGLETON
+    // ═══════════════════════════════════════════════════════════════
+    
+    private static GameManager _instance;
+    
+    public static GameManager Instance
     {
         get
         {
-            if (_whiteSprite == null)
+            if (_instance == null)
             {
-                Texture2D tex = new Texture2D(8, 8);
-                Color[] colors = new Color[64];
-                for (int i = 0; i < 64; i++) colors[i] = Color.white;
-                tex.SetPixels(colors);
-                tex.Apply();
-                tex.filterMode = FilterMode.Point;
-                _whiteSprite = Sprite.Create(tex, new Rect(0, 0, 8, 8), new Vector2(0.5f, 0.5f), 8f);
+                _instance = FindFirstObjectByType<GameManager>();
+                
+                if (_instance == null)
+                {
+                    Debug.LogError("[GameManager] No GameManager found in scene!");
+                }
             }
-            return _whiteSprite;
+            return _instance;
         }
     }
-
+    
+    // ═══════════════════════════════════════════════════════════════
+    // LEVEL EDITOR SUPPORT
+    // ═══════════════════════════════════════════════════════════════
+    
+    [Header("Level Editor")]
+    public LevelData currentLevelData;
+    public GameObject brickPrefab;
+    public List<BrickShape> availableShapes = new List<BrickShape>();
+    public List<GameObject> activeBricks = new List<GameObject>();
+    
+    [Header("Level Bounds")]
+    public Vector2 boundsCenter = Vector2.zero;
+    public Vector2 boundsSize = new Vector2(18f, 10f);
+    
+    [Header("Brick Spacing")]
+    public float brickGapX = 0.1f;
+    public float brickGapY = 0.1f;
+    
+    [Header("Default Brick Settings")]
+    public Vector2 defaultBrickSize = new Vector2(1f, 0.5f);
+    
+    // ═══════════════════════════════════════════════════════════════
+    // GAME REFERENCES
+    // ═══════════════════════════════════════════════════════════════
+    
+    [Header("Game Prefabs")]
+    [SerializeField] private GameObject ballPrefab;
+    
+    [Header("Game References")]
+    [SerializeField] private Paddle paddle;
+    [SerializeField] private Transform spawnPoint;
+    
+    // Cached references
+    private Ball _currentBall;
+    private List<Ball> _activeBalls = new List<Ball>();
+    private List<Brick> _activeBrickComponents = new List<Brick>();
+    
+    // ═══════════════════════════════════════════════════════════════
+    // GAME STATE
+    // ═══════════════════════════════════════════════════════════════
+    
+    [Header("Game State")]
+    [SerializeField] private int currentLevel = 1;
+    [SerializeField] private int playerLives = Constants.Game.STARTING_LIVES;
+    [SerializeField] private int playerScore = 0;
+    
+    public int CurrentLevel => currentLevel;
+    public int PlayerLives => playerLives;
+    public int PlayerScore => playerScore;
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PROPERTIES
+    // ═══════════════════════════════════════════════════════════════
+    
+    public Paddle Paddle => paddle;
+    public Ball CurrentBall => _currentBall;
+    public int ActiveBallCount => _activeBalls.Count;
+    public int RemainingBricks => _activeBrickComponents.Count;
+    
+    // ═══════════════════════════════════════════════════════════════
+    // UNITY LIFECYCLE
+    // ═══════════════════════════════════════════════════════════════
+    
     private void Awake()
     {
-        if (Instance == null)
-        {
-            Instance = this;
-        }
-        else if (Instance != this)
+        // Singleton setup
+        if (_instance != null && _instance != this)
         {
             Destroy(gameObject);
             return;
         }
-
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
         
-        toughSound = ProceduralSoundGenerator.PaddleHit();
-        breakSound = ProceduralSoundGenerator.BrickDestroy();
+        _instance = this;
+        DontDestroyOnLoad(gameObject);
+        
+        InitializeReferences();
     }
-
-    void Start()
+    
+    private void OnEnable()
     {
-        if (Application.isPlaying)
+        SubscribeToEvents();
+    }
+    
+    private void OnDisable()
+    {
+        UnsubscribeFromEvents();
+    }
+    
+    private void Start()
+    {
+        GameStateManager.Instance.ChangeState(GameState.WaitingToStart);
+        
+        // Load level from LevelData if available
+        if (currentLevelData != null && Application.isPlaying)
         {
-            PlaySound(ProceduralSoundGenerator.GameStart());
-            StartGame();
+            LoadLevelFromData();
+        }
+        
+        InitializeLevel();
+        
+        // Auto-load save if exists
+        if (SaveSystem.Instance != null && SaveSystem.Instance.HasSaveFile())
+        {
+            SaveSystem.Instance.LoadGame();
         }
     }
-
-    public void PlaySound(AudioClip clip)
+    
+    private void OnDestroy()
     {
-        if (audioSource != null && clip != null)
-            audioSource.PlayOneShot(clip);
+        if (_instance == this)
+        {
+            UnsubscribeFromEvents();
+            _instance = null;
+        }
     }
-
-    public GameObject CreateBrick(BrickData data, bool isPreview)
+    
+    // ═══════════════════════════════════════════════════════════════
+    // INITIALIZATION
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void InitializeReferences()
     {
-        if (brickPrefab == null) return null;
-
-        GameObject newBrick = Instantiate(brickPrefab, (Vector3)data.position, Quaternion.identity);
-        newBrick.transform.localScale = Vector3.one;
-
-        SpriteRenderer sr = newBrick.GetComponent<SpriteRenderer>();
-        if (sr == null)
+        // Find paddle if not assigned
+        if (paddle == null)
         {
-            sr = newBrick.AddComponent<SpriteRenderer>();
-        }
-
-        if (data.shape != null && data.shape.sprite != null)
-        {
-            sr.sprite = data.shape.sprite;
-        }
-
-        Color finalColor = data.color;
-        finalColor.a = 1f;
-        sr.color = finalColor;
-        sr.sortingOrder = 10;
-
-        if (showBrickFrame)
-        {
-            AddFrame(newBrick, sr);
-        }
-
-        if (isPreview)
-        {
-            newBrick.hideFlags = HideFlags.DontSave;
-        }
-        else
-        {
-            Brick bScript = newBrick.GetComponent<Brick>();
-            if (bScript == null)
+            paddle = FindFirstObjectByType<Paddle>();
+            
+            if (paddle == null)
             {
-                bScript = newBrick.AddComponent<Brick>();
-            }
-            bScript.Init(data.health, finalColor, this);
-        }
-
-        return newBrick;
-    }
-
-    private void AddFrame(GameObject brick, SpriteRenderer brickSR)
-    {
-        if (brickSR == null || brickSR.sprite == null) return;
-
-        Vector2 brickSize = brickSR.sprite.bounds.size;
-        float halfW = brickSize.x / 2f;
-        float halfH = brickSize.y / 2f;
-        float t = frameThickness;
-
-        // Create frame parent
-        GameObject frameParent = new GameObject("Frame");
-        frameParent.transform.SetParent(brick.transform, false);
-        frameParent.transform.localPosition = Vector3.zero;
-
-        // === OUTER FRAME (4 sides) ===
-        
-        // Top frame bar
-        CreateFrameBar(frameParent, "TopFrame",
-            new Vector3(0, halfH + t / 2f, 0.01f),
-            new Vector3(brickSize.x + t * 2f, t, 1f),
-            frameColor, 5);
-
-        // Bottom frame bar
-        CreateFrameBar(frameParent, "BottomFrame",
-            new Vector3(0, -halfH - t / 2f, 0.01f),
-            new Vector3(brickSize.x + t * 2f, t, 1f),
-            frameColor, 5);
-
-        // Left frame bar
-        CreateFrameBar(frameParent, "LeftFrame",
-            new Vector3(-halfW - t / 2f, 0, 0.01f),
-            new Vector3(t, brickSize.y, 1f),
-            frameColor, 5);
-
-        // Right frame bar
-        CreateFrameBar(frameParent, "RightFrame",
-            new Vector3(halfW + t / 2f, 0, 0.01f),
-            new Vector3(t, brickSize.y, 1f),
-            frameColor, 5);
-
-        // === METALLIC EFFECT ===
-        if (metallicEffect)
-        {
-            // Top highlight (light reflection)
-            Color highlightColor = new Color(1f, 1f, 1f, highlightStrength);
-            CreateFrameBar(frameParent, "TopHighlight",
-                new Vector3(0, halfH + t * 0.75f, 0.005f),
-                new Vector3(brickSize.x + t, t * 0.4f, 1f),
-                highlightColor, 6);
-
-            // Left highlight
-            CreateFrameBar(frameParent, "LeftHighlight",
-                new Vector3(-halfW - t * 0.75f, 0, 0.005f),
-                new Vector3(t * 0.4f, brickSize.y - t * 0.5f, 1f),
-                highlightColor, 6);
-
-            // Bottom shadow
-            Color shadowColor = new Color(0f, 0f, 0f, shadowStrength);
-            CreateFrameBar(frameParent, "BottomShadow",
-                new Vector3(0, -halfH - t * 0.75f, 0.005f),
-                new Vector3(brickSize.x + t, t * 0.4f, 1f),
-                shadowColor, 6);
-
-            // Right shadow
-            CreateFrameBar(frameParent, "RightShadow",
-                new Vector3(halfW + t * 0.75f, 0, 0.005f),
-                new Vector3(t * 0.4f, brickSize.y - t * 0.5f, 1f),
-                shadowColor, 6);
-
-            // Inner bevel highlight (top-left inner edge)
-            Color innerHighlight = new Color(1f, 1f, 1f, highlightStrength * 0.5f);
-            CreateFrameBar(frameParent, "InnerTopHighlight",
-                new Vector3(0, halfH - t * 0.15f, -0.001f),
-                new Vector3(brickSize.x - t * 0.3f, t * 0.2f, 1f),
-                innerHighlight, 11);
-
-            CreateFrameBar(frameParent, "InnerLeftHighlight",
-                new Vector3(-halfW + t * 0.15f, 0, -0.001f),
-                new Vector3(t * 0.2f, brickSize.y - t * 0.6f, 1f),
-                innerHighlight, 11);
-
-            // Inner bevel shadow (bottom-right inner edge)
-            Color innerShadow = new Color(0f, 0f, 0f, shadowStrength * 0.3f);
-            CreateFrameBar(frameParent, "InnerBottomShadow",
-                new Vector3(0, -halfH + t * 0.15f, -0.001f),
-                new Vector3(brickSize.x - t * 0.3f, t * 0.2f, 1f),
-                innerShadow, 11);
-
-            CreateFrameBar(frameParent, "InnerRightShadow",
-                new Vector3(halfW - t * 0.15f, 0, -0.001f),
-                new Vector3(t * 0.2f, brickSize.y - t * 0.6f, 1f),
-                innerShadow, 11);
-        }
-    }
-
-    private void CreateFrameBar(GameObject parent, string name, Vector3 localPos, Vector3 scale, Color color, int sortOrder)
-    {
-        GameObject bar = new GameObject(name);
-        bar.transform.SetParent(parent.transform, false);
-        bar.transform.localPosition = localPos;
-        bar.transform.localScale = scale;
-
-        SpriteRenderer sr = bar.AddComponent<SpriteRenderer>();
-        sr.sprite = WhiteSprite;
-        sr.color = color;
-        sr.sortingOrder = sortOrder;
-    }
-
-    public void StartGame()
-    {
-        score = 0; 
-        lives = 10; 
-        gameOver = false; 
-        wonGame = false;
-        
-        if (paddle != null) paddle.SetActive(true);
-        if (ball != null) ball.SetActive(true);
-        
-        currentLevelIndex = 0;
-        LoadCurrentLevelFromList();
-    }
-
-    public void LoadCurrentLevelFromList()
-    {
-        if (allLevels.Count > 0 && currentLevelIndex < allLevels.Count)
-        {
-            currentLevelData = allLevels[currentLevelIndex];
-            LoadLevel(currentLevelData);
-            ResetBallAndPaddle();
-        }
-        else if (allLevels.Count > 0) 
-        {
-            WinGame();
-        }
-    }
-
-    public void LoadLevel(LevelData data)
-    {
-        foreach (GameObject b in activeBricks) 
-        {
-            if (b != null) Destroy(b);
-        }
-        activeBricks.Clear();
-        
-        if (data == null) return;
-        
-        foreach (BrickData brick in data.bricks)
-        {
-            GameObject newBrick = CreateBrick(brick, false);
-            if (newBrick != null) activeBricks.Add(newBrick);
-        }
-    }
-
-    public void RemoveBrick(GameObject brick)
-    {
-        activeBricks.Remove(brick);
-        score += 10;
-        
-        if (ball != null && ball.TryGetComponent(out Ball ballScript))
-            ballScript.IncreaseSpeed(0.05f);
-
-        if (activeBricks.Count <= 0)
-        {
-            currentLevelIndex++;
-            if (currentLevelIndex < allLevels.Count) 
-            {
-                LoadCurrentLevelFromList();
-            }
-            else 
-            {
-                WinGame();
+                Debug.LogWarning("[GameManager] No Paddle found in scene!");
             }
         }
-    }
-
-    public void LiveLost()
-    {
-        lives--;
-        PlaySound(ProceduralSoundGenerator.BallLost());
         
-        if (lives < 1)
+        // Create spawn point if not assigned
+        if (spawnPoint == null)
         {
-            gameOver = true;
-            PlaySound(ProceduralSoundGenerator.GameOver());
-            if (paddle != null) paddle.SetActive(false);
-            if (ball != null) ball.SetActive(false);
-            if (gameUI != null) gameUI.SetGameOver();
-        }
-        else 
-        {
-            ResetBallAndPaddle();
-        }
-    }
-
-    private void ResetBallAndPaddle()
-    {
-        if (paddle != null)
-        {
-            Paddle paddleScript = paddle.GetComponent<Paddle>();
-            if (paddleScript != null)
+            GameObject spawnGO = new GameObject("BallSpawnPoint");
+            spawnPoint = spawnGO.transform;
+            spawnPoint.SetParent(transform);
+            
+            // Position above paddle
+            if (paddle != null)
             {
-                paddleScript.ResetPaddle();
+                Vector3 pos = paddle.transform.position;
+                pos.y += 1f;
+                spawnPoint.position = pos;
             }
             else
             {
-                paddle.transform.position = new Vector3(0, paddle.transform.position.y, 0);
+                spawnPoint.position = new Vector3(0, -3, 0);
             }
         }
-
-        if (ball != null)
+        
+        // Validate ball prefab
+        if (ballPrefab == null)
         {
-            ball.SetActive(true);
-            
-            Ball ballScript = ball.GetComponent<Ball>();
-            if (ballScript != null)
-            {
-                ballScript.ResetBall();
-            }
+            Debug.LogWarning("[GameManager] Ball prefab not assigned!");
+        }
+        else if (ballPrefab.GetComponent<Ball>() == null)
+        {
+            Debug.LogError("[GameManager] Ball prefab missing Ball component!");
+        }
+        
+        // Initialize activeBricks list if null
+        if (activeBricks == null)
+        {
+            activeBricks = new List<GameObject>();
         }
     }
-
-    public void WinGame()
+    
+    private void InitializeLevel()
     {
-        wonGame = true;
-        PlaySound(ProceduralSoundGenerator.LevelComplete());
-        if (paddle != null) paddle.SetActive(false);
-        if (ball != null) ball.SetActive(false);
-        if (gameUI != null) gameUI.SetWin();
+        RefreshBrickList();
+        
+        Debug.Log($"[GameManager] Level {currentLevel} initialized with {_activeBrickComponents.Count} bricks");
     }
-
-    public Vector2 GetBrickWorldSize(BrickShape shape)
-    {
-        if (shape != null && shape.sprite != null) return shape.sprite.bounds.size;
-        if (brickPrefab != null)
-        {
-            SpriteRenderer sr = brickPrefab.GetComponent<SpriteRenderer>();
-            if (sr != null && sr.sprite != null) return sr.sprite.bounds.size;
-        }
-        return new Vector2(0.9f, 0.4f);
-    }
-
+    
+    // ═══════════════════════════════════════════════════════════════
+    // LEVEL EDITOR METHODS
+    // ═══════════════════════════════════════════════════════════════
+    
     public Vector2 GetStepSize(BrickShape shape)
     {
-        Vector2 size = GetBrickWorldSize(shape);
-        return new Vector2(size.x + brickGapX, size.y + brickGapY);
+        Vector2 brickSize = GetBrickWorldSize(shape);
+        return new Vector2(brickSize.x + brickGapX, brickSize.y + brickGapY);
     }
-
-    public bool IsInBounds(Vector2 pos)
+    
+    public Vector2 GetBrickWorldSize(BrickShape shape)
     {
-        float halfW = boundsSize.x / 2f;
-        float halfH = boundsSize.y / 2f;
-        return pos.x >= boundsCenter.x - halfW && pos.x <= boundsCenter.x + halfW &&
-               pos.y >= boundsCenter.y - halfH && pos.y <= boundsCenter.y + halfH;
-    }
-
-    public void RefreshPreview()
-    {
-        if (Application.isPlaying) return;
-        for (int i = activeBricks.Count - 1; i >= 0; i--)
-            if (activeBricks[i] != null) DestroyImmediate(activeBricks[i]);
-        activeBricks.Clear();
-        if (currentLevelData == null) return;
-        foreach (BrickData brick in currentLevelData.bricks)
+        if (shape != null)
         {
-            GameObject newBrick = CreateBrick(brick, true);
-            if (newBrick != null) activeBricks.Add(newBrick);
+            return shape.size;
+        }
+        return defaultBrickSize;
+    }
+    
+    public bool IsInBounds(Vector2 position)
+    {
+        float halfWidth = boundsSize.x / 2f;
+        float halfHeight = boundsSize.y / 2f;
+        
+        return position.x >= boundsCenter.x - halfWidth &&
+               position.x <= boundsCenter.x + halfWidth &&
+               position.y >= boundsCenter.y - halfHeight &&
+               position.y <= boundsCenter.y + halfHeight;
+    }
+    
+    public GameObject CreateBrick(BrickData brickData, bool isPreview = false)
+    {
+        if (brickPrefab == null)
+        {
+            Debug.LogError("[GameManager] Brick prefab not assigned!");
+            return null;
+        }
+        
+        GameObject brickObj = Instantiate(brickPrefab, brickData.position, Quaternion.identity);
+        
+        if (isPreview)
+        {
+            brickObj.hideFlags = HideFlags.DontSave;
+        }
+        
+        // Apply scale
+        if (brickData.brickScale != Vector3.zero)
+        {
+            brickObj.transform.localScale = brickData.brickScale;
+        }
+        
+        // Set up sprite renderer
+        SpriteRenderer sr = brickObj.GetComponent<SpriteRenderer>();
+        if (sr != null)
+        {
+            sr.color = brickData.color;
+            
+            // Apply shape sprite if available
+            if (brickData.shape != null && brickData.shape.sprite != null)
+            {
+                sr.sprite = brickData.shape.sprite;
+            }
+        }
+        
+        // Set up brick component
+        Brick brickComponent = brickObj.GetComponent<Brick>();
+        if (brickComponent == null)
+        {
+            brickComponent = brickObj.AddComponent<Brick>();
+        }
+        
+        // Set brick properties using reflection or public setters
+        // Note: You may need to add public setters to Brick.cs for these
+        
+        return brickObj;
+    }
+    
+    private void LoadLevelFromData()
+    {
+        if (currentLevelData == null || currentLevelData.bricks == null)
+        {
+            Debug.LogWarning("[GameManager] No level data to load!");
+            return;
+        }
+        
+        // Clear existing bricks
+        ClearAllBricks();
+        
+        // Spawn bricks from data
+        foreach (BrickData brickData in currentLevelData.bricks)
+        {
+            GameObject brick = CreateBrick(brickData, false);
+            if (brick != null)
+            {
+                activeBricks.Add(brick);
+            }
+        }
+        
+        Debug.Log($"[GameManager] Loaded {currentLevelData.bricks.Count} bricks from level data");
+    }
+    
+    private void ClearAllBricks()
+    {
+        // Destroy all active bricks
+        foreach (GameObject brick in activeBricks)
+        {
+            if (brick != null)
+            {
+                Destroy(brick);
+            }
+        }
+        activeBricks.Clear();
+        
+        // Also find and destroy any bricks in scene
+        Brick[] allBricks = FindObjectsByType<Brick>(FindObjectsSortMode.None);
+        foreach (Brick brick in allBricks)
+        {
+            if (brick != null)
+            {
+                Destroy(brick.gameObject);
+            }
         }
     }
-
-    private void OnDrawGizmos()
+    
+    // ═══════════════════════════════════════════════════════════════
+    // EVENT SUBSCRIPTION
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void SubscribeToEvents()
     {
-        Gizmos.color = new Color(0, 1, 1, 0.3f);
-        Gizmos.DrawWireCube((Vector3)boundsCenter, (Vector3)boundsSize);
+        GameEvents.OnBallLost += HandleBallLost;
+        GameEvents.OnBrickDestroyed += HandleBrickDestroyed;
+        GameEvents.OnAllBricksDestroyed += HandleAllBricksDestroyed;
+        GameEvents.OnGameStarted += HandleGameStarted;
+        GameEvents.OnGameOver += HandleGameOver;
+    }
+    
+    private void UnsubscribeFromEvents()
+    {
+        GameEvents.OnBallLost -= HandleBallLost;
+        GameEvents.OnBrickDestroyed -= HandleBrickDestroyed;
+        GameEvents.OnAllBricksDestroyed -= HandleAllBricksDestroyed;
+        GameEvents.OnGameStarted -= HandleGameStarted;
+        GameEvents.OnGameOver -= HandleGameOver;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // EVENT HANDLERS
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void HandleBallLost(Ball ball)
+    {
+        if (ball == null) return;
+        
+        // Remove from active balls
+        _activeBalls.Remove(ball);
+        
+        if (ball == _currentBall)
+        {
+            _currentBall = null;
+        }
+        
+        // Destroy the ball
+        Destroy(ball.gameObject);
+        
+        // Check if any balls remain
+        if (_activeBalls.Count == 0)
+        {
+            LoseLife();
+        }
+    }
+    
+    private void HandleBrickDestroyed(Brick brick, int scoreValue)
+    {
+        if (brick == null) return;
+        
+        // Add score
+        AddScore(scoreValue);
+        
+        // Remove from active bricks
+        _activeBrickComponents.Remove(brick);
+        
+        // Also remove from activeBricks GameObject list
+        if (brick.gameObject != null)
+        {
+            activeBricks.Remove(brick.gameObject);
+        }
+        
+        // Check level completion
+        CheckLevelComplete();
+    }
+    
+    private void HandleAllBricksDestroyed()
+    {
+        CompleteLevel();
+    }
+    
+    private void HandleGameStarted()
+    {
+        if (_currentBall == null)
+        {
+            SpawnBall();
+        }
+    }
+    
+    private void HandleGameOver(bool isWin)
+    {
+        if (isWin)
+        {
+            Debug.Log($"[GameManager] Victory! Final Score: {playerScore}");
+        }
+        else
+        {
+            Debug.Log($"[GameManager] Game Over! Final Score: {playerScore}");
+        }
+        
+        StartCoroutine(GameOverRoutine(isWin));
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // BALL MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
+    
+    public Ball SpawnBall()
+    {
+        return SpawnBall(spawnPoint != null ? spawnPoint.position : Vector3.zero);
+    }
+    
+    public Ball SpawnBall(Vector3 position)
+    {
+        if (ballPrefab == null)
+        {
+            Debug.LogError("[GameManager] Cannot spawn ball - prefab is null!");
+            return null;
+        }
+        
+        GameObject ballGO = Instantiate(ballPrefab, position, Quaternion.identity);
+        Ball ball = ballGO.GetComponent<Ball>();
+        
+        if (ball == null)
+        {
+            Debug.LogError("[GameManager] Ball prefab missing Ball component!");
+            Destroy(ballGO);
+            return null;
+        }
+        
+        // Track the ball
+        _activeBalls.Add(ball);
+        
+        if (_currentBall == null)
+        {
+            _currentBall = ball;
+        }
+        
+        // Fire event
+        GameEvents.BallSpawned(ball);
+        
+        Debug.Log($"[GameManager] Ball spawned at {position}");
+        
+        return ball;
+    }
+    
+    public void LaunchBall()
+    {
+        if (_currentBall == null)
+        {
+            Debug.LogWarning("[GameManager] No ball to launch!");
+            return;
+        }
+        
+        if (!GameStateManager.Instance.CanPlay)
+        {
+            Debug.LogWarning("[GameManager] Cannot launch ball - game not in playable state");
+            return;
+        }
+        
+        // Launch the ball
+        _currentBall.Launch();
+        
+        // Change state to playing
+        GameStateManager.Instance.ChangeState(GameState.Playing);
+    }
+    
+    public void SpawnMultiBalls(int count)
+    {
+        if (_currentBall == null)
+        {
+            Debug.LogWarning("[GameManager] No current ball to spawn from!");
+            return;
+        }
+        
+        Vector3 currentPos = _currentBall.transform.position;
+        Vector2 currentVel = _currentBall.GetComponent<Rigidbody2D>().linearVelocity;
+        
+        for (int i = 0; i < count; i++)
+        {
+            Ball newBall = SpawnBall(currentPos);
+            
+            if (newBall != null)
+            {
+                // Launch at angle spread
+                float angle = Constants.PowerUp.MULTI_BALL_ANGLE_SPREAD * (i + 1);
+                Vector2 direction = Quaternion.Euler(0, 0, angle) * currentVel.normalized;
+                newBall.Launch(direction);
+            }
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // BRICK MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void RefreshBrickList()
+    {
+        _activeBrickComponents.Clear();
+        
+        Brick[] allBricks = FindObjectsByType<Brick>(FindObjectsSortMode.None);
+        
+        foreach (Brick brick in allBricks)
+        {
+            // Only count destructible bricks
+            if (brick != null && !brick.IsIndestructible)
+            {
+                _activeBrickComponents.Add(brick);
+            }
+        }
+    }
+    
+    private void CheckLevelComplete()
+    {
+        // Remove any null references
+        _activeBrickComponents.RemoveAll(brick => brick == null);
+        
+        // Check if all destructible bricks are gone
+        if (_activeBrickComponents.Count == 0)
+        {
+            GameEvents.AllBricksDestroyed();
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // SCORE & LIVES
+    // ═══════════════════════════════════════════════════════════════
+    
+    public void AddScore(int points)
+    {
+        int oldScore = playerScore;
+        playerScore += points;
+        
+        GameEvents.ScoreChanged(oldScore, playerScore);
+        
+        Debug.Log($"[GameManager] Score: {oldScore} -> {playerScore} (+{points})");
+    }
+    
+    public void AddLife()
+    {
+        if (playerLives >= Constants.Game.MAX_LIVES)
+        {
+            // Convert to score instead
+            AddScore(1000);
+            return;
+        }
+        
+        int oldLives = playerLives;
+        playerLives++;
+        
+        GameEvents.LivesChanged(oldLives, playerLives);
+    }
+    
+    private void LoseLife()
+    {
+        int oldLives = playerLives;
+        playerLives--;
+        
+        GameEvents.LivesChanged(oldLives, playerLives);
+        
+        Debug.Log($"[GameManager] Lives: {oldLives} -> {playerLives}");
+        
+        if (playerLives <= 0)
+        {
+            GameOver();
+        }
+        else
+        {
+            StartCoroutine(RespawnRoutine());
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // LEVEL CONTROL
+    // ═══════════════════════════════════════════════════════════════
+    
+    public void StartGame()
+    {
+        if (GameStateManager.Instance.CurrentState == GameState.WaitingToStart)
+        {
+            LaunchBall();
+        }
+        else if (GameStateManager.Instance.CurrentState == GameState.Paused)
+        {
+            GameStateManager.Instance.ChangeState(GameState.Playing);
+        }
+    }
+    
+    public void PauseGame()
+    {
+        if (GameStateManager.Instance.IsPlaying)
+        {
+            GameStateManager.Instance.ChangeState(GameState.Paused);
+        }
+    }
+    
+    public void ResumeGame()
+    {
+        if (GameStateManager.Instance.IsPaused)
+        {
+            GameStateManager.Instance.ChangeState(GameState.Playing);
+        }
+    }
+    
+    private void CompleteLevel()
+    {
+        Debug.Log($"[GameManager] Level {currentLevel} complete!");
+        
+        GameStateManager.Instance.ChangeState(GameState.LevelComplete);
+        GameEvents.LevelCompleted(currentLevel);
+        
+        // Save progress
+        SaveProgress();
+        
+        StartCoroutine(LevelCompleteRoutine());
+    }
+    
+    private void GameOver()
+    {
+        // Update high score
+        if (SaveSystem.Instance != null)
+        {
+            SaveSystem.Instance.SaveHighScore(playerScore);
+        }
+        
+        GameStateManager.Instance.ChangeState(GameState.GameOver);
+    }
+    
+    public void RestartGame()
+    {
+        // Reset state
+        playerScore = 0;
+        playerLives = Constants.Game.STARTING_LIVES;
+        currentLevel = Constants.Game.STARTING_LEVEL;
+        
+        // Reload scene
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+    
+    public void LoadLevel(int levelIndex)
+    {
+        currentLevel = levelIndex;
+        GameEvents.LevelLoading(levelIndex);
+        
+        // Reload current scene
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // SAVE/LOAD INTEGRATION
+    // ═══════════════════════════════════════════════════════════════
+    
+    public void SaveProgress()
+    {
+        if (SaveSystem.Instance != null)
+        {
+            SaveSystem.Instance.SaveGame();
+            Debug.Log("[GameManager] Progress saved");
+        }
+    }
+    
+    public void LoadProgress()
+    {
+        if (SaveSystem.Instance != null && SaveSystem.Instance.HasSaveFile())
+        {
+            bool loaded = SaveSystem.Instance.LoadGame();
+            
+            if (loaded)
+            {
+                Debug.Log("[GameManager] Progress loaded");
+            }
+        }
+    }
+    
+    public void SetGameState(int level, int score, int lives)
+    {
+        currentLevel = level;
+        playerScore = score;
+        playerLives = lives;
+        
+        Debug.Log($"[GameManager] Game state set: Level {level}, Score {score}, Lives {lives}");
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COROUTINES
+    // ═══════════════════════════════════════════════════════════════
+    
+    private IEnumerator RespawnRoutine()
+    {
+        GameStateManager.Instance.ChangeState(GameState.WaitingToStart);
+        
+        yield return new WaitForSeconds(Constants.Game.RESPAWN_DELAY);
+        
+        if (paddle != null)
+        {
+            paddle.ResetPosition();
+        }
+        
+        SpawnBall();
+        
+        GameEvents.ShowMessage("Press SPACE to launch", 2f);
+    }
+    
+    private IEnumerator LevelCompleteRoutine()
+    {
+        yield return new WaitForSeconds(Constants.Game.LEVEL_TRANSITION_DELAY);
+        
+        currentLevel++;
+        LoadLevel(currentLevel);
+    }
+    
+    private IEnumerator GameOverRoutine(bool isWin)
+    {
+        yield return new WaitForSeconds(Constants.Game.GAME_OVER_DELAY);
+        
+        Debug.Log("[GameManager] Restarting game...");
+        RestartGame();
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // DEBUG
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void OnGUI()
+    {
+        if (!Debug.isDebugBuild) return;
+        
+        GUILayout.BeginArea(new Rect(10, 10, 300, 200));
+        GUILayout.Label($"State: {GameStateManager.Instance.CurrentState}");
+        GUILayout.Label($"Score: {playerScore}");
+        GUILayout.Label($"Lives: {playerLives}");
+        GUILayout.Label($"Level: {currentLevel}");
+        GUILayout.Label($"Active Balls: {_activeBalls.Count}");
+        GUILayout.Label($"Remaining Bricks: {_activeBrickComponents.Count}");
+        GUILayout.EndArea();
     }
 }

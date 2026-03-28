@@ -2,108 +2,146 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
 
-public class CraftingSlotUI : MonoBehaviour, 
-    IDropHandler, 
-    IPointerClickHandler,
-    IPointerEnterHandler,   // ✅ ADDED (my mistake)
-    IPointerExitHandler     // ✅ ADDED (my mistake)
+/// <summary>
+/// Individual crafting slot UI
+/// Place in: Assets/Scripts/UI/CraftingSlotUI.cs
+/// </summary>
+public class CraftingSlotUI : MonoBehaviour, IDropHandler, IPointerClickHandler
 {
-    [Header("References")]
-    public Image iconImage;
-    public Image backgroundImage;
+    [Header("Slot Settings")]
+    [SerializeField] private int slotIndex;
     
-    [Header("Data")]
-    public ItemData currentItem;
+    [Header("UI References")]
+    [SerializeField] private Image iconImage;
+    [SerializeField] private GameObject emptyIndicator;
     
-    [Header("Visual")]
-    public Color emptyColor = new Color(0.16f, 0.16f, 0.16f, 1f);
-    public Color filledColor = new Color(0.25f, 0.25f, 0.25f, 1f);
-    public Color highlightColor = new Color(0.4f, 0.6f, 1f, 0.3f);
+    // ═══════════════════════════════════════════════════════════════
+    // UNITY LIFECYCLE
+    // ═══════════════════════════════════════════════════════════════
     
-    private int slotIndex;
-    
-    public void Initialize(int index)
+    private void Start()
     {
-        slotIndex = index;
-        ClearSlot();
+        RefreshSlot();
     }
     
-    public bool CanAcceptItem(ItemData item)
+    // ═══════════════════════════════════════════════════════════════
+    // UI UPDATE
+    // ═══════════════════════════════════════════════════════════════
+    
+    public void RefreshSlot()
     {
-        return currentItem == null && item != null;
+        if (CraftingSystem.Instance == null) return;
+        
+        bool isFilled = CraftingSystem.Instance.IsSlotFilled(slotIndex);
+        
+        if (isFilled)
+        {
+            ItemType itemType = CraftingSystem.Instance.GetItemInSlot(slotIndex);
+            
+            // TODO: Get icon from ItemType (you'll need an ItemDatabase)
+            if (iconImage != null)
+            {
+                iconImage.enabled = true;
+                // iconImage.sprite = GetSpriteForItemType(itemType);
+            }
+            
+            if (emptyIndicator != null)
+            {
+                emptyIndicator.SetActive(false);
+            }
+        }
+        else
+        {
+            if (iconImage != null)
+            {
+                iconImage.enabled = false;
+            }
+            
+            if (emptyIndicator != null)
+            {
+                emptyIndicator.SetActive(true);
+            }
+        }
     }
     
-    public void SetItem(ItemData item)
-    {
-        if (item == null) return;
-        
-        currentItem = item;
-        
-        if (iconImage != null)
-        {
-            iconImage.sprite = item.icon;
-            iconImage.color = item.itemColor;
-            iconImage.enabled = true;
-        }
-        
-        if (backgroundImage != null)
-        {
-            backgroundImage.color = filledColor;
-        }
-        
-        if (CraftingSystem.Instance != null)
-        {
-            CraftingSystem.Instance.SetSlot(slotIndex, item.itemType);
-        }
-    }
-    
-    public void ClearSlot()
-    {
-        currentItem = null;
-        
-        if (iconImage != null)
-        {
-            iconImage.sprite = null;
-            iconImage.enabled = false;
-        }
-        
-        if (backgroundImage != null)
-        {
-            backgroundImage.color = emptyColor;
-        }
-        
-        if (CraftingSystem.Instance != null)
-        {
-            CraftingSystem.Instance.SetSlot(slotIndex, null);
-        }
-    }
+    // ═══════════════════════════════════════════════════════════════
+    // DROP HANDLER
+    // ═══════════════════════════════════════════════════════════════
     
     public void OnDrop(PointerEventData eventData)
     {
-        // Handled by DragDropHandler.OnEndDrag
+        if (CraftingSystem.Instance == null) return;
+        
+        // Check if slot is already filled
+        if (CraftingSystem.Instance.IsSlotFilled(slotIndex))
+        {
+            Debug.LogWarning($"[CraftingSlotUI] Slot {slotIndex} already filled!");
+            return;
+        }
+        
+        // Get dragged item
+        GameObject draggedObject = eventData.pointerDrag;
+        
+        if (draggedObject != null)
+        {
+            DragDropHandler dragHandler = draggedObject.GetComponent<DragDropHandler>();
+            
+            if (dragHandler != null && dragHandler.GetItemType() != ItemType.None)
+            {
+                ItemType itemType = dragHandler.GetItemType();
+                
+                // Add to crafting system
+                bool added = CraftingSystem.Instance.AddItemToSlot(slotIndex, itemType);
+                
+                if (added)
+                {
+                    // Remove from inventory
+                    if (PlayerInventory.Instance != null)
+                    {
+                        PlayerInventory.Instance.RemoveItem(itemType, 1);
+                    }
+                    
+                    RefreshSlot();
+                }
+            }
+        }
     }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // CLICK HANDLER
+    // ═══════════════════════════════════════════════════════════════
     
     public void OnPointerClick(PointerEventData eventData)
     {
-        if (eventData.button == PointerEventData.InputButton.Right || eventData.clickCount == 2)
+        if (CraftingSystem.Instance == null) return;
+        
+        // Right click to remove item
+        if (eventData.button == PointerEventData.InputButton.Right)
         {
-            ClearSlot();
+            if (CraftingSystem.Instance.IsSlotFilled(slotIndex))
+            {
+                ItemType itemType = CraftingSystem.Instance.GetItemInSlot(slotIndex);
+                
+                // Remove from crafting
+                bool removed = CraftingSystem.Instance.RemoveItemFromSlot(slotIndex);
+                
+                if (removed)
+                {
+                    // Return to inventory
+                    if (PlayerInventory.Instance != null)
+                    {
+                        PlayerInventory.Instance.AddItem(itemType, 1);
+                    }
+                    
+                    RefreshSlot();
+                }
+            }
         }
     }
     
-    public void OnPointerEnter(PointerEventData eventData)
-    {
-        if (backgroundImage != null && currentItem == null)
-        {
-            backgroundImage.color = highlightColor;
-        }
-    }
+    // ═══════════════════════════════════════════════════════════════
+    // PROPERTIES
+    // ═══════════════════════════════════════════════════════════════
     
-    public void OnPointerExit(PointerEventData eventData)
-    {
-        if (backgroundImage != null && currentItem == null)
-        {
-            backgroundImage.color = emptyColor;
-        }
-    }
+    public int GetSlotIndex() => slotIndex;
 }

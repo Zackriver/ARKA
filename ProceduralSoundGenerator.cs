@@ -1,374 +1,256 @@
 using UnityEngine;
-using System;
+using System.Collections.Generic;
 
-public static class ProceduralSoundGenerator
+/// <summary>
+/// Generates procedural sound effects with proper cleanup
+/// Place in: Assets/Scripts/Systems/ProceduralSoundGenerator.cs
+/// </summary>
+public class ProceduralSoundGenerator : MonoBehaviour
 {
-    private static int sampleRate = 44100;
-
-    // ==================== WAVEFORM GENERATORS ====================
+    // ═══════════════════════════════════════════════════════════════
+    // SINGLETON
+    // ═══════════════════════════════════════════════════════════════
     
-    private static float Sin(float frequency, int sample)
+    private static ProceduralSoundGenerator _instance;
+    
+    public static ProceduralSoundGenerator Instance
     {
-        return Mathf.Sin(2f * Mathf.PI * frequency * sample / sampleRate);
-    }
-
-    private static float Square(float frequency, int sample)
-    {
-        return Sin(frequency, sample) >= 0 ? 1f : -1f;
-    }
-
-    private static float Triangle(float frequency, int sample)
-    {
-        float t = (float)sample / sampleRate * frequency;
-        return 2f * Mathf.Abs(2f * (t - Mathf.Floor(t + 0.5f))) - 1f;
-    }
-
-    private static float Sawtooth(float frequency, int sample)
-    {
-        float t = (float)sample / sampleRate * frequency;
-        return 2f * (t - Mathf.Floor(t)) - 1f;
-    }
-
-    private static float Noise()
-    {
-        return UnityEngine.Random.Range(-1f, 1f);
-    }
-
-    // ==================== HELPER FUNCTIONS ====================
-
-    private static float Lerp(float a, float b, float t)
-    {
-        return a + (b - a) * Mathf.Clamp01(t);
-    }
-
-    private static float ExpDecay(float t, float decay)
-    {
-        return Mathf.Exp(-decay * t);
-    }
-
-    // Attempt at a slightly different ADSR style
-    private static float ADSREnvelope(float t, float attack, float decay, float sustain, float release, float duration)
-    {
-        float attackEnd = attack;
-        float decayEnd = attack + decay;
-        float releaseStart = duration - release;
-
-        if (t < attackEnd)
-            return t / attack; // Attack: 0 to 1
-        else if (t < decayEnd)
-            return 1f - ((t - attackEnd) / decay) * (1f - sustain); // Decay: 1 to sustain
-        else if (t < releaseStart)
-            return sustain; // Sustain
-        else
-            return sustain * (1f - (t - releaseStart) / release); // Release: sustain to 0
-    }
-
-    private static AudioClip CreateClip(string name, float duration, Func<int, float, float> generator)
-    {
-        int sampleCount = (int)(sampleRate * duration);
-        float[] samples = new float[sampleCount];
-
-        for (int i = 0; i < sampleCount; i++)
+        get
         {
-            float t = (float)i / sampleCount;
-            samples[i] = Mathf.Clamp(generator(i, t), -1f, 1f);
+            if (_instance == null)
+            {
+                _instance = FindFirstObjectByType<ProceduralSoundGenerator>();
+                
+                if (_instance == null)
+                {
+                    GameObject go = new GameObject("[ProceduralSoundGenerator]");
+                    _instance = go.AddComponent<ProceduralSoundGenerator>();
+                    DontDestroyOnLoad(go);
+                }
+            }
+            return _instance;
         }
-
-        AudioClip clip = AudioClip.Create(name, sampleCount, 1, sampleRate, false);
-        clip.SetData(samples, 0);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // AUDIO CLIP CACHE
+    // ═══════════════════════════════════════════════════════════════
+    
+    private Dictionary<string, AudioClip> clipCache = new Dictionary<string, AudioClip>();
+    private const int MAX_CACHED_CLIPS = 20;
+    
+    // ═══════════════════════════════════════════════════════════════
+    // UNITY LIFECYCLE
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void Awake()
+    {
+        if (_instance != null && _instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        
+        _instance = this;
+        DontDestroyOnLoad(gameObject);
+    }
+    
+    private void OnEnable()
+    {
+        GameEvents.OnPlaySound += HandlePlaySound;
+    }
+    
+    private void OnDisable()
+    {
+        GameEvents.OnPlaySound -= HandlePlaySound;
+    }
+    
+    private void OnDestroy()
+    {
+        if (_instance == this)
+        {
+            CleanupAllClips();
+            _instance = null;
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // EVENT HANDLERS
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void HandlePlaySound(string soundId, Vector3 position)
+    {
+        PlaySound(soundId, position);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // SOUND GENERATION
+    // ═══════════════════════════════════════════════════════════════
+    
+    public void PlaySound(string soundId, Vector3 position)
+    {
+        AudioClip clip = GetOrCreateClip(soundId);
+        
+        if (clip != null && AudioPool.Instance != null)
+        {
+            AudioPool.Instance.PlayOneShot(clip, position, Constants.Audio.DEFAULT_VOLUME);
+        }
+    }
+    
+    private AudioClip GetOrCreateClip(string soundId)
+    {
+        // Check cache first
+        if (clipCache.ContainsKey(soundId))
+        {
+            return clipCache[soundId];
+        }
+        
+        // Create new clip
+        AudioClip clip = CreateClipForSound(soundId);
+        
+        if (clip != null)
+        {
+            // Add to cache
+            CacheClip(soundId, clip);
+        }
+        
         return clip;
     }
-
-    // ==================== GAME SOUNDS ====================
-    // Modify the values below to change how each sound plays!
-
-    /// <summary>
-    /// Sound when ball hits paddle
-    /// </summary>
-    public static AudioClip PaddleHit()
+    
+    private AudioClip CreateClipForSound(string soundId)
     {
-        // === MODIFY THESE VALUES ===
-        float duration = 0.1f;          // Length in seconds (0.05 - 0.3)
-        float startFreq = 300f;         // Starting pitch Hz (100 - 1000)
-        float endFreq = 500f;           // Ending pitch Hz (100 - 1000)
-        float decaySpeed = 5f;          // How fast volume fades (1 - 20)
-        float volume = 0.5f;            // Master volume (0 - 1)
-        // ============================
-
-        return CreateClip("PaddleHit", duration, (i, t) =>
+        switch (soundId)
         {
-            float freq = Lerp(startFreq, endFreq, t);
-            float envelope = ExpDecay(t, decaySpeed);
-            return Triangle(freq, i) * envelope * volume;
-        });
-    }
-
-    /// <summary>
-    /// Sound when ball hits wall
-    /// </summary>
-    public static AudioClip WallHit()
-    {
-        // === MODIFY THESE VALUES ===
-        float duration = 0.08f;
-        float startFreq = 200f;
-        float endFreq = 150f;
-        float decaySpeed = 6f;
-        float volume = 0.4f;
-        // ============================
-
-        return CreateClip("WallHit", duration, (i, t) =>
-        {
-            float freq = Lerp(startFreq, endFreq, t);
-            float envelope = ExpDecay(t, decaySpeed);
-            return Sin(freq, i) * envelope * volume;
-        });
-    }
-
-    /// <summary>
-    /// Sound when brick is destroyed
-    /// </summary>
-    public static AudioClip BrickDestroy()
-    {
-        // === MODIFY THESE VALUES ===
-        float duration = 0.15f;
-        float startFreq = 600f;
-        float endFreq = 200f;
-        float toneDecay = 4f;
-        float noiseDecay = 8f;
-        float toneVolume = 0.3f;
-        float noiseVolume = 0.2f;
-        // ============================
-
-        return CreateClip("BrickDestroy", duration, (i, t) =>
-        {
-            float freq = Lerp(startFreq, endFreq, t);
-            float envelope = ExpDecay(t, toneDecay);
-            float tone = Square(freq, i) * toneVolume;
-            float noise = Noise() * ExpDecay(t, noiseDecay) * noiseVolume;
-            return (tone + noise) * envelope;
-        });
-    }
-
-    /// <summary>
-    /// Sound when game starts
-    /// </summary>
-    public static AudioClip GameStart()
-    {
-        // === MODIFY THESE VALUES ===
-        float duration = 0.5f;
-        float startFreq = 200f;
-        float endFreq = 400f;
-        float decaySpeed = 2f;
-        float volume = 0.5f;
-        // ============================
-
-        return CreateClip("GameStart", duration, (i, t) =>
-        {
-            float freq = Lerp(startFreq, endFreq, t);
-            return Sin(freq, i) * ExpDecay(t, decaySpeed) * volume;
-        });
-    }
-
-    /// <summary>
-    /// Sound when ball is lost
-    /// </summary>
-    public static AudioClip BallLost()
-    {
-        // === MODIFY THESE VALUES ===
-        float duration = 0.5f;
-        float startFreq = 400f;
-        float endFreq = 100f;
-        float decaySpeed = 2f;
-        float volume = 0.5f;
-        // ============================
-
-        return CreateClip("BallLost", duration, (i, t) =>
-        {
-            float freq = Lerp(startFreq, endFreq, t);
-            return Sawtooth(freq, i) * ExpDecay(t, decaySpeed) * volume;
-        });
-    }
-
-    /// <summary>
-    /// Sound when game is over
-    /// </summary>
-    public static AudioClip GameOver()
-    {
-        // === MODIFY THESE VALUES ===
-        float duration = 1f;
-        float startFreq = 200f;
-        float endFreq = 50f;
-        float decaySpeed = 1f;
-        float volume = 0.5f;
-        // ============================
-
-        return CreateClip("GameOver", duration, (i, t) =>
-        {
-            float freq = Lerp(startFreq, endFreq, t);
-            return Square(freq, i) * ExpDecay(t, decaySpeed) * volume;
-        });
-    }
-
-    /// <summary>
-    /// Sound when level is completed
-    /// </summary>
-    public static AudioClip LevelComplete()
-    {
-        // === MODIFY THESE VALUES ===
-        float duration = 0.8f;
-        float startFreq = 400f;
-        float endFreq = 800f;
-        float decaySpeed = 2f;
-        float volume = 0.5f;
-        // ============================
-
-        return CreateClip("LevelComplete", duration, (i, t) =>
-        {
-            float freq = Lerp(startFreq, endFreq, t);
-            return Triangle(freq, i) * ExpDecay(t, decaySpeed) * volume;
-        });
-    }
-
-    // ==================== EXTRA SOUND OPTIONS ====================
-    // You can add these to your game or replace existing sounds!
-
-    /// <summary>
-    /// Retro 8-bit style hit
-    /// </summary>
-    public static AudioClip RetroBleep()
-    {
-        return CreateClip("RetroBleep", 0.08f, (i, t) =>
-        {
-            float freq = 880f; // A5 note
-            float envelope = ExpDecay(t, 10f);
-            return Square(freq, i) * envelope * 0.3f;
-        });
-    }
-
-    /// <summary>
-    /// Arcade coin sound
-    /// </summary>
-    public static AudioClip CoinSound()
-    {
-        return CreateClip("Coin", 0.2f, (i, t) =>
-        {
-            // Two alternating frequencies for that classic coin sound
-            float freq1 = 988f;  // B5
-            float freq2 = 1319f; // E6
-            float freq = t < 0.5f ? freq1 : freq2;
-            float envelope = ExpDecay(t, 4f);
-            return Triangle(freq, i) * envelope * 0.4f;
-        });
-    }
-
-    /// <summary>
-    /// Explosion sound
-    /// </summary>
-    public static AudioClip Explosion()
-    {
-        return CreateClip("Explosion", 0.4f, (i, t) =>
-        {
-            float freq = Lerp(150f, 30f, t);
-            float noiseAmount = ExpDecay(t, 3f);
-            float tone = Sin(freq, i) * 0.3f;
-            float noise = Noise() * noiseAmount * 0.7f;
-            return (tone + noise) * ExpDecay(t, 2.5f);
-        });
-    }
-
-    /// <summary>
-    /// Power-up collected sound
-    /// </summary>
-    public static AudioClip PowerUp()
-    {
-        return CreateClip("PowerUp", 0.3f, (i, t) =>
-        {
-            // Rising arpeggio effect
-            float baseFreq = 400f;
-            float freqMultiplier = 1f + t * 2f; // Goes up 2 octaves
-            float freq = baseFreq * freqMultiplier;
-            float envelope = ExpDecay(t, 3f);
-            return Triangle(freq, i) * envelope * 0.4f;
-        });
-    }
-
-    /// <summary>
-    /// Laser/zap sound
-    /// </summary>
-    public static AudioClip Laser()
-    {
-        return CreateClip("Laser", 0.15f, (i, t) =>
-        {
-            float freq = Lerp(1000f, 200f, t);
-            float envelope = ExpDecay(t, 5f);
-            return Sawtooth(freq, i) * envelope * 0.3f;
-        });
-    }
-
-    /// <summary>
-    /// Soft bounce (alternative paddle hit)
-    /// </summary>
-    public static AudioClip SoftBounce()
-    {
-        return CreateClip("SoftBounce", 0.1f, (i, t) =>
-        {
-            float freq = Lerp(250f, 350f, t);
-            float envelope = ExpDecay(t, 8f);
-            return Sin(freq, i) * envelope * 0.4f;
-        });
-    }
-
-    /// <summary>
-    /// Hard hit (alternative brick destroy)
-    /// </summary>
-    public static AudioClip HardHit()
-    {
-        return CreateClip("HardHit", 0.12f, (i, t) =>
-        {
-            float freq = Lerp(800f, 300f, t);
-            float envelope = ExpDecay(t, 6f);
-            float tone = Square(freq, i) * 0.4f;
-            float noise = Noise() * ExpDecay(t, 10f) * 0.3f;
-            return (tone + noise) * envelope;
-        });
-    }
-
-    /// <summary>
-    /// Victory fanfare (multi-note)
-    /// </summary>
-    public static AudioClip VictoryFanfare()
-    {
-        return CreateClip("Victory", 1.0f, (i, t) =>
-        {
-            // 4 ascending notes
-            float[] notes = { 523f, 659f, 784f, 1047f }; // C5, E5, G5, C6
-            int noteIndex = Mathf.Min((int)(t * 4), 3);
-            float freq = notes[noteIndex];
+            case "BrickHit":
+                return GenerateTone(Constants.Audio.BALL_HIT_FREQUENCY, Constants.Audio.SHORT_SOUND_DURATION);
             
-            // Each note has its own mini-envelope
-            float noteT = (t * 4) - noteIndex;
-            float envelope = ExpDecay(noteT, 4f);
+            case "BrickBreak":
+                return GenerateTone(Constants.Audio.BRICK_BREAK_FREQUENCY, Constants.Audio.MEDIUM_SOUND_DURATION);
             
-            return Triangle(freq, i) * envelope * 0.4f;
-        });
+            case "PowerUpActivate":
+            case "PowerUpCollect":
+                return GenerateTone(Constants.Audio.POWER_UP_FREQUENCY, Constants.Audio.SHORT_SOUND_DURATION);
+            
+            case "PowerUpExpire":
+                return GenerateTone(Constants.Audio.POWER_UP_FREQUENCY * 0.5f, Constants.Audio.SHORT_SOUND_DURATION);
+            
+            case "ItemPickup":
+                return GenerateTone(660f, Constants.Audio.SHORT_SOUND_DURATION);
+            
+            case "ItemCollectFail":
+                return GenerateTone(220f, Constants.Audio.SHORT_SOUND_DURATION);
+            
+            case "CraftSuccess":
+                return GenerateTone(880f, Constants.Audio.MEDIUM_SOUND_DURATION);
+            
+            case "CraftFail":
+                return GenerateTone(Constants.Audio.GAME_OVER_FREQUENCY, Constants.Audio.SHORT_SOUND_DURATION);
+            
+            default:
+                Debug.LogWarning($"[ProceduralSoundGenerator] Unknown sound ID: {soundId}");
+                return GenerateTone(440f, Constants.Audio.SHORT_SOUND_DURATION);
+        }
     }
-
-    /// <summary>
-    /// Defeat/failure sound (multi-note descending)
-    /// </summary>
-    public static AudioClip DefeatSound()
+    
+    private AudioClip GenerateTone(float frequency, float duration)
     {
-        return CreateClip("Defeat", 1.2f, (i, t) =>
+        int sampleRate = Constants.Audio.SAMPLE_RATE;
+        int sampleCount = Mathf.RoundToInt(sampleRate * duration);
+        
+        float[] samples = new float[sampleCount];
+        
+        for (int i = 0; i < sampleCount; i++)
         {
-            // 3 descending notes
-            float[] notes = { 392f, 311f, 261f }; // G4, Eb4, C4
-            int noteIndex = Mathf.Min((int)(t * 3), 2);
-            float freq = notes[noteIndex];
+            float t = (float)i / sampleRate;
             
-            float noteT = (t * 3) - noteIndex;
-            float envelope = ExpDecay(noteT, 3f);
+            // Generate sine wave
+            samples[i] = Mathf.Sin(2f * Mathf.PI * frequency * t);
             
-            return Sawtooth(freq, i) * envelope * 0.4f;
-        });
+            // Apply envelope (fade in/out)
+            float envelope = 1f;
+            float fadeTime = 0.01f; // 10ms fade
+            int fadeSamples = Mathf.RoundToInt(fadeTime * sampleRate);
+            
+            if (i < fadeSamples)
+            {
+                // Fade in
+                envelope = (float)i / fadeSamples;
+            }
+            else if (i > sampleCount - fadeSamples)
+            {
+                // Fade out
+                envelope = (float)(sampleCount - i) / fadeSamples;
+            }
+            
+            samples[i] *= envelope;
+        }
+        
+        AudioClip clip = AudioClip.Create($"Tone_{frequency}Hz", sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        
+        return clip;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // CACHE MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void CacheClip(string soundId, AudioClip clip)
+    {
+        // Check cache size
+        if (clipCache.Count >= MAX_CACHED_CLIPS)
+        {
+            // Remove oldest (first) entry
+            var enumerator = clipCache.GetEnumerator();
+            if (enumerator.MoveNext())
+            {
+                string oldestKey = enumerator.Current.Key;
+                AudioClip oldClip = clipCache[oldestKey];
+                
+                clipCache.Remove(oldestKey);
+                
+                if (oldClip != null)
+                {
+                    Destroy(oldClip);
+                }
+            }
+        }
+        
+        clipCache[soundId] = clip;
+    }
+    
+    private void CleanupAllClips()
+    {
+        foreach (var kvp in clipCache)
+        {
+            if (kvp.Value != null)
+            {
+                Destroy(kvp.Value);
+            }
+        }
+        
+        clipCache.Clear();
+        
+        Debug.Log("[ProceduralSoundGenerator] All audio clips cleaned up");
+    }
+    
+    public void ClearCache()
+    {
+        CleanupAllClips();
+        Debug.Log("[ProceduralSoundGenerator] Cache cleared");
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // DEBUG
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void OnGUI()
+    {
+        if (!Debug.isDebugBuild) return;
+        
+        GUILayout.BeginArea(new Rect(10, 680, 300, 80));
+        GUILayout.Label("=== Sound Generator ===");
+        GUILayout.Label($"Cached Clips: {clipCache.Count}/{MAX_CACHED_CLIPS}");
+        GUILayout.EndArea();
     }
 }

@@ -10,7 +10,9 @@ public enum ItemRarity
 }
 
 public enum ItemType
-{
+{ 
+    None = 0,
+    
     // Common
     MetalShard,
     PlasmaOrb,

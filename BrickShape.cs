@@ -1,13 +1,21 @@
 using UnityEngine;
 
-[CreateAssetMenu(fileName = "NewBrickShape", menuName = "Breakout/Brick Shape")]
+/// <summary>
+/// Defines custom brick shapes for level designer
+/// Place in: Assets/Scripts/Data/BrickShape.cs
+/// </summary>
+[CreateAssetMenu(fileName = "NewBrickShape", menuName = "Game Data/Brick Shape")]
 public class BrickShape : ScriptableObject
 {
-    public string shapeName = "Square";
+    [Header("Shape Info")]
+    public string shapeName = "Custom Brick";
+    
+    [Header("Visual")]
     public Sprite sprite;
-    public Vector3 defaultScale = new Vector3(0.8f, 0.4f, 1f);
-
-    [Tooltip("Leave empty to use default brick prefab with swapped sprite. " +
-             "Assign a custom prefab for shapes that need different colliders.")]
-    public GameObject customPrefab;
+    public Vector2 size = new Vector2(1f, 0.5f);
+    
+    [Header("Physics")]
+    public bool useCustomCollider = false;
+    public Vector2 colliderSize = new Vector2(1f, 0.5f);
+    public Vector2 colliderOffset = Vector2.zero;
 }

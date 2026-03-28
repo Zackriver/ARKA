@@ -1,102 +1,109 @@
 ﻿using UnityEngine;
 
+/// <summary>
+/// Brick that can be destroyed by the ball
+/// Place in: Assets/Scripts/Gameplay/Brick.cs
+/// </summary>
+[RequireComponent(typeof(SpriteRenderer))]
 [RequireComponent(typeof(BoxCollider2D))]
 public class Brick : MonoBehaviour
 {
-    public int health = 1;
-    public GameManager manager;
+    [Header("Brick Settings")]
+    [SerializeField] private int resistance = Constants.Brick.DEFAULT_RESISTANCE;
+    [SerializeField] private int scoreValue = Constants.Brick.DEFAULT_SCORE_VALUE;
+    [SerializeField] private bool isIndestructible = false;
+    
+    [Header("Visual")]
+    [SerializeField] private Color normalColor = Color.white;
+    [SerializeField] private Color damagedColor = Color.red;
+    [SerializeField] private Color indestructibleColor = Color.gray;
+    
     private SpriteRenderer spriteRenderer;
-
-    void Awake()
+    private int currentResistance;
+    
+    // Public properties
+    public bool IsIndestructible => isIndestructible || resistance == Constants.Brick.INDESTRUCTIBLE_RESISTANCE;
+    public int CurrentResistance => currentResistance;
+    public int ScoreValue => scoreValue;
+    
+    private void Awake()
     {
         spriteRenderer = GetComponent<SpriteRenderer>();
         
-        BoxCollider2D col = GetComponent<BoxCollider2D>();
-        if (col == null)
+        // Initialize resistance
+        if (isIndestructible)
         {
-            col = gameObject.AddComponent<BoxCollider2D>();
+            currentResistance = Constants.Brick.INDESTRUCTIBLE_RESISTANCE;
+        }
+        else
+        {
+            currentResistance = resistance;
         }
         
-        if (col.isTrigger)
+        UpdateVisuals();
+    }
+    
+    public void Hit()
+    {
+        if (IsIndestructible)
         {
-            col.isTrigger = false;
+            // Indestructible brick - just play sound
+            GameEvents.PlaySound("BrickHit", transform.position);
+            return;
+        }
+        
+        currentResistance--;
+        
+        if (currentResistance <= 0)
+        {
+            DestroyBrick();
+        }
+        else
+        {
+            // Damaged but not destroyed
+            UpdateVisuals();
+            GameEvents.BrickHit(this, currentResistance);
+            GameEvents.PlaySound("BrickHit", transform.position);
         }
     }
-
-    void Start()
+    
+    private void DestroyBrick()
     {
-        if (manager == null)
+        // Fire event BEFORE destroying
+        GameEvents.BrickDestroyed(this, scoreValue);
+        GameEvents.PlaySound("BrickBreak", transform.position);
+        
+        // Chance to drop power-up
+        if (Random.value <= Constants.Brick.DROP_CHANCE)
         {
-            manager = FindFirstObjectByType<GameManager>();
+            // This will be handled by ItemDropper if it exists
+            GameEvents.ItemDropped(null, transform.position);
+        }
+        
+        Destroy(gameObject);
+    }
+    
+    private void UpdateVisuals()
+    {
+        if (spriteRenderer == null) return;
+        
+        if (IsIndestructible)
+        {
+            spriteRenderer.color = indestructibleColor;
+        }
+        else
+        {
+            // Interpolate color based on damage
+            float damagePercent = 1f - ((float)currentResistance / resistance);
+            spriteRenderer.color = Color.Lerp(normalColor, damagedColor, damagePercent);
         }
     }
-
-    public void Init(int hp, Color color, GameManager mgr)
-    {
-        health = hp;
-        manager = mgr;
-        if (spriteRenderer == null) spriteRenderer = GetComponent<SpriteRenderer>();
-        if (spriteRenderer != null) spriteRenderer.color = color;
-    }
-
+    
     private void OnCollisionEnter2D(Collision2D collision)
     {
-        if (manager == null)
+        if (collision.gameObject.CompareTag(Constants.Tags.BALL))
         {
-            manager = FindFirstObjectByType<GameManager>();
-        }
-
-        if (collision.gameObject.CompareTag("Ball"))
-        {
-            health--;
-
-            if (manager != null)
-            {
-                if (health <= 0)
-                {
-                    manager.PlaySound(manager.breakSound);
-                    manager.RemoveBrick(this.gameObject);
-                    
-                    // === NEW: Try to drop items ===
-                    if (ItemDropper.Instance != null)
-                    {
-                        ItemDropper.Instance.OnBrickDestroyed(transform.position);
-                    
-                    }
-                       Destroy(this.gameObject);
-                    
-                }
-                else
-                {
-                    manager.PlaySound(manager.toughSound);
-                    DarkenOnHit();
-                }
-            }
-            else
-            {
-                if (health <= 0)
-                {
-                    // === NEW: Try to drop item ===
-                    if (ItemDropper.Instance != null)
-                    {
-                        ItemDropper.Instance.OnBrickDestroyed(transform.position);
-                    }
-                    
-                    Destroy(this.gameObject);
-                }
-            }
-        }
-    }
-
-    void DarkenOnHit()
-    {
-        if (spriteRenderer != null)
-        {
-            Color c = spriteRenderer.color;
-            c.r *= 0.8f; 
-            c.g *= 0.8f; 
-            c.b *= 0.8f;
-            spriteRenderer.color = c;
+            Hit();
         }
     }
 }

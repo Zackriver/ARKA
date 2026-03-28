@@ -1,345 +1,342 @@
-using UnityEngine;
-using System;
 using System.Collections.Generic;
+using UnityEngine;
 
-[Serializable]
-public class ItemStack
-{
-    public ItemType itemType;
-    public int quantity;
-    
-    public ItemStack(ItemType type, int qty = 1)
-    {
-        itemType = type;
-        quantity = qty;
-    }
-}
-
-[Serializable]
-public class PowerUpProgress
-{
-    public PowerUpType powerUpType;
-    public int level;
-    public bool unlocked;
-    public float rechargeTimer;
-    
-    public PowerUpProgress(PowerUpType type)
-    {
-        powerUpType = type;
-        level = 0;
-        unlocked = false;
-        rechargeTimer = 0f;
-    }
-}
-
-[Serializable]
-public class InventorySaveData
-{
-    public List<ItemStack> items = new List<ItemStack>();
-    public List<PowerUpProgress> powerUps = new List<PowerUpProgress>();
-    public int playerLevel = 1;
-}
-
+/// <summary>
+/// Player inventory system with events and save-ready structure
+/// Place in: Assets/Scripts/Systems/PlayerInventory.cs
+/// </summary>
+[DefaultExecutionOrder(-60)]
 public class PlayerInventory : MonoBehaviour
 {
-    public static PlayerInventory Instance { get; private set; }
+    // ═══════════════════════════════════════════════════════════════
+    // SINGLETON
+    // ═══════════════════════════════════════════════════════════════
     
-    [Header("Inventory")]
-    public List<ItemStack> items = new List<ItemStack>();
-    public int maxStackSize = 99;
+    private static PlayerInventory _instance;
     
-    [Header("Power-Ups")]
-    public List<PowerUpProgress> powerUpProgress = new List<PowerUpProgress>();
+    public static PlayerInventory Instance
+    {
+        get
+        {
+            if (_instance == null)
+            {
+                _instance = FindFirstObjectByType<PlayerInventory>();
+                
+                if (_instance == null)
+                {
+                    GameObject go = new GameObject("[PlayerInventory]");
+                    _instance = go.AddComponent<PlayerInventory>();
+                    DontDestroyOnLoad(go);
+                }
+            }
+            return _instance;
+        }
+    }
     
-    [Header("Player Progress")]
-    public int playerLevel = 1;
+    // ═══════════════════════════════════════════════════════════════
+    // INVENTORY DATA
+    // ═══════════════════════════════════════════════════════════════
     
-    [Header("Settings")]
-    public int multiPowerUpUnlockLevel = 50;
+    [Header("Inventory Settings")]
+    [SerializeField] private int maxSlots = Constants.Inventory.DEFAULT_SLOTS;
     
-    public event Action<ItemType, int> OnItemAdded;
-    public event Action<ItemType, int> OnItemRemoved;
-    public event Action<PowerUpType, int> OnPowerUpLevelUp;
-    public event Action OnInventoryChanged;
+    // Item storage: ItemType -> Quantity
+    private Dictionary<ItemType, int> inventory = new Dictionary<ItemType, int>();
     
-    private const string SAVE_KEY = "PlayerInventory";
+    public int MaxSlots => maxSlots;
+    public int UsedSlots => inventory.Count;
+    public int FreeSlots => maxSlots - UsedSlots;
+    
+    // ═══════════════════════════════════════════════════════════════
+    // UNITY LIFECYCLE
+    // ═══════════════════════════════════════════════════════════════
     
     private void Awake()
     {
-        if (Instance == null)
-        {
-            Instance = this;
-            
-            if (transform.parent != null)
-            {
-                transform.SetParent(null);
-            }
-            
-            DontDestroyOnLoad(gameObject);
-            LoadInventory();
-            InitializePowerUpProgress();
-        }
-        else
+        if (_instance != null && _instance != this)
         {
             Destroy(gameObject);
+            return;
         }
-    }
-    
-    private void InitializePowerUpProgress()
-    {
-        foreach (PowerUpType type in Enum.GetValues(typeof(PowerUpType)))
-        {
-            if (!HasPowerUpProgress(type))
-            {
-                powerUpProgress.Add(new PowerUpProgress(type));
-            }
-        }
-    }
-    
-    private bool HasPowerUpProgress(PowerUpType type)
-    {
-        foreach (var progress in powerUpProgress)
-        {
-            if (progress.powerUpType == type) return true;
-        }
-        return false;
-    }
-    
-    // ==================== ITEM MANAGEMENT ====================
-    
-    public void AddItem(ItemType type, int quantity = 1)
-    {
-        ItemStack existing = GetItemStack(type);
         
-        if (existing != null)
+        _instance = this;
+        DontDestroyOnLoad(gameObject);
+        
+        InitializeInventory();
+    }
+    
+    private void OnDestroy()
+    {
+        if (_instance == this)
         {
-            existing.quantity = Mathf.Min(existing.quantity + quantity, maxStackSize);
+            _instance = null;
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // INITIALIZATION
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void InitializeInventory()
+    {
+        inventory.Clear();
+        Debug.Log($"[PlayerInventory] Initialized with {maxSlots} slots");
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // ADD ITEMS
+    // ═══════════════════════════════════════════════════════════════
+    
+    public bool AddItem(ItemType itemType, int amount = 1)
+    {
+        if (itemType == ItemType.None)
+        {
+            Debug.LogWarning("[PlayerInventory] Cannot add None item type!");
+            return false;
+        }
+        
+        if (amount <= 0)
+        {
+            Debug.LogWarning($"[PlayerInventory] Invalid amount: {amount}");
+            return false;
+        }
+        
+        // Check if we already have this item
+        if (inventory.ContainsKey(itemType))
+        {
+            // Check stack limit
+            int currentAmount = inventory[itemType];
+            int newAmount = currentAmount + amount;
+            
+            if (newAmount > Constants.Inventory.MAX_STACK_SIZE)
+            {
+                Debug.LogWarning($"[PlayerInventory] Stack limit reached for {itemType}!");
+                return false;
+            }
+            
+            inventory[itemType] = newAmount;
         }
         else
         {
-            items.Add(new ItemStack(type, Mathf.Min(quantity, maxStackSize)));
+            // New item - check slot availability
+            if (UsedSlots >= maxSlots)
+            {
+                Debug.LogWarning("[PlayerInventory] Inventory full!");
+                GameEvents.ShowMessage("Inventory full!", 2f);
+                return false;
+            }
+            
+            inventory.Add(itemType, amount);
         }
         
-        OnItemAdded?.Invoke(type, quantity);
-        OnInventoryChanged?.Invoke();
-        SaveInventory();
+        // Fire event
+        GameEvents.ItemAdded(null, amount);
+        
+        Debug.Log($"[PlayerInventory] Added {amount}x {itemType}. Total: {inventory[itemType]}");
+        
+        return true;
     }
     
-    public bool RemoveItem(ItemType type, int quantity = 1)
+    // ═══════════════════════════════════════════════════════════════
+    // REMOVE ITEMS
+    // ═══════════════════════════════════════════════════════════════
+    
+    public bool RemoveItem(ItemType itemType, int amount = 1)
     {
-        ItemStack existing = GetItemStack(type);
+        if (itemType == ItemType.None)
+        {
+            Debug.LogWarning("[PlayerInventory] Cannot remove None item type!");
+            return false;
+        }
         
-        if (existing == null || existing.quantity < quantity)
+        if (amount <= 0)
+        {
+            Debug.LogWarning($"[PlayerInventory] Invalid amount: {amount}");
+            return false;
+        }
+        
+        // Check if we have this item
+        if (!inventory.ContainsKey(itemType))
+        {
+            Debug.LogWarning($"[PlayerInventory] Item not found: {itemType}");
+            return false;
+        }
+        
+        int currentAmount = inventory[itemType];
+        
+        if (currentAmount < amount)
+        {
+            Debug.LogWarning($"[PlayerInventory] Not enough {itemType}. Have: {currentAmount}, Need: {amount}");
+            return false;
+        }
+        
+        int newAmount = currentAmount - amount;
+        
+        if (newAmount <= 0)
+        {
+            // Remove completely
+            inventory.Remove(itemType);
+        }
+        else
+        {
+            inventory[itemType] = newAmount;
+        }
+        
+        // Fire event
+        GameEvents.ItemRemoved(null, amount);
+        
+        Debug.Log($"[PlayerInventory] Removed {amount}x {itemType}. Remaining: {newAmount}");
+        
+        return true;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // QUERY ITEMS
+    // ═══════════════════════════════════════════════════════════════
+    
+    public bool HasItem(ItemType itemType, int amount = 1)
+    {
+        if (!inventory.ContainsKey(itemType))
         {
             return false;
         }
         
-        existing.quantity -= quantity;
-        
-        if (existing.quantity <= 0)
+        return inventory[itemType] >= amount;
+    }
+    
+    public int GetItemCount(ItemType itemType)
+    {
+        if (!inventory.ContainsKey(itemType))
         {
-            items.Remove(existing);
+            return 0;
         }
         
-        OnItemRemoved?.Invoke(type, quantity);
-        OnInventoryChanged?.Invoke();
-        SaveInventory();
-        return true;
+        return inventory[itemType];
     }
     
-    public int GetItemCount(ItemType type)
+    public Dictionary<ItemType, int> GetAllItems()
     {
-        ItemStack stack = GetItemStack(type);
-        return stack != null ? stack.quantity : 0;
+        return new Dictionary<ItemType, int>(inventory);
     }
     
-    public ItemStack GetItemStack(ItemType type)
+    public List<ItemType> GetItemTypes()
     {
-        foreach (var stack in items)
-        {
-            if (stack.itemType == type) return stack;
-        }
-        return null;
+        return new List<ItemType>(inventory.Keys);
     }
     
-    public bool HasItems(ItemType[] types)
-    {
-        Dictionary<ItemType, int> required = new Dictionary<ItemType, int>();
-        
-        foreach (var type in types)
-        {
-            if (required.ContainsKey(type))
-                required[type]++;
-            else
-                required[type] = 1;
-        }
-        
-        foreach (var kvp in required)
-        {
-            if (GetItemCount(kvp.Key) < kvp.Value)
-                return false;
-        }
-        
-        return true;
-    }
-    
-    // ==================== POWER-UP MANAGEMENT ====================
-    
-    public PowerUpProgress GetPowerUpProgress(PowerUpType type)
-    {
-        foreach (var progress in powerUpProgress)
-        {
-            if (progress.powerUpType == type) return progress;
-        }
-        return null;
-    }
-    
-    public bool IsPowerUpUnlocked(PowerUpType type)
-    {
-        var progress = GetPowerUpProgress(type);
-        return progress != null && progress.unlocked;
-    }
-    
-    public int GetPowerUpLevel(PowerUpType type)
-    {
-        var progress = GetPowerUpProgress(type);
-        return progress != null ? progress.level : 0;
-    }
-    
-    public bool UnlockOrUpgradePowerUp(PowerUpType type)
-    {
-        var progress = GetPowerUpProgress(type);
-        
-        if (progress == null)
-        {
-            progress = new PowerUpProgress(type);
-            powerUpProgress.Add(progress);
-        }
-        
-        if (!progress.unlocked)
-        {
-            progress.unlocked = true;
-            progress.level = 1;
-        }
-        else
-        {
-            progress.level++;
-        }
-        
-        OnPowerUpLevelUp?.Invoke(type, progress.level);
-        OnInventoryChanged?.Invoke();
-        SaveInventory();
-        
-        return true;
-    }
-    
-    public bool IsPowerUpReady(PowerUpType type)
-    {
-        var progress = GetPowerUpProgress(type);
-        return progress != null && progress.unlocked && progress.rechargeTimer <= 0f;
-    }
-    
-    public void StartRecharge(PowerUpType type, float rechargeTime)
-    {
-        var progress = GetPowerUpProgress(type);
-        if (progress != null)
-        {
-            progress.rechargeTimer = rechargeTime;
-        }
-    }
-    
-    public void UpdateRechargeTimers(float deltaTime)
-    {
-        foreach (var progress in powerUpProgress)
-        {
-            if (progress.rechargeTimer > 0f)
-            {
-                progress.rechargeTimer -= deltaTime;
-                if (progress.rechargeTimer < 0f)
-                {
-                    progress.rechargeTimer = 0f;
-                }
-            }
-        }
-    }
-    
-    public bool CanUseMultiplePowerUps()
-    {
-        return playerLevel >= multiPowerUpUnlockLevel;
-    }
-    
-    // ==================== SAVE/LOAD ====================
-    
-    public void SaveInventory()
-    {
-        InventorySaveData data = new InventorySaveData
-        {
-            items = new List<ItemStack>(items),
-            powerUps = new List<PowerUpProgress>(powerUpProgress),
-            playerLevel = playerLevel
-        };
-        
-        string json = JsonUtility.ToJson(data);
-        PlayerPrefs.SetString(SAVE_KEY, json);
-        PlayerPrefs.Save();
-    }
-    
-    public void LoadInventory()
-    {
-        if (PlayerPrefs.HasKey(SAVE_KEY))
-        {
-            string json = PlayerPrefs.GetString(SAVE_KEY);
-            InventorySaveData data = JsonUtility.FromJson<InventorySaveData>(json);
-            
-            if (data != null)
-            {
-                items = data.items ?? new List<ItemStack>();
-                powerUpProgress = data.powerUps ?? new List<PowerUpProgress>();
-                playerLevel = data.playerLevel;
-            }
-        }
-    }
+    // ═══════════════════════════════════════════════════════════════
+    // INVENTORY MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
     
     public void ClearInventory()
     {
-        items.Clear();
-        powerUpProgress.Clear();
-        playerLevel = 1;
-        InitializePowerUpProgress();
-        SaveInventory();
-        OnInventoryChanged?.Invoke();
-    }
-    
-    // ==================== DEBUG / TESTING ====================
-    
-    [ContextMenu("Add Test Items")]
-    public void AddTestItems()
-    {
-        AddItem(ItemType.MetalShard, 5);
-        AddItem(ItemType.PlasmaOrb, 5);
-        AddItem(ItemType.TechChip, 5);
-        AddItem(ItemType.EnergyCore, 3);
-        AddItem(ItemType.PowerCell, 3);
-        AddItem(ItemType.CircuitBoard, 3);
-        AddItem(ItemType.MagnetPiece, 2);
-        AddItem(ItemType.ShieldFragment, 2);
-        AddItem(ItemType.SpeedGem, 2);
-        AddItem(ItemType.FireEssence, 1);
-        AddItem(ItemType.AcidVial, 1);
-        AddItem(ItemType.GravityStone, 1);
-        AddItem(ItemType.LaserLens, 1);
-        AddItem(ItemType.ExplosivePowder, 1);
-        AddItem(ItemType.PulseCrystal, 1);
+        inventory.Clear();
+        GameEvents.InventoryChanged();
         
-        Debug.Log("[PlayerInventory] Test items added!");
+        Debug.Log("[PlayerInventory] Inventory cleared");
     }
     
-    [ContextMenu("Clear All Items")]
-    public void ClearAllItems()
+    public bool IsFull()
     {
-        items.Clear();
-        SaveInventory();
-        OnInventoryChanged?.Invoke();
-        Debug.Log("[PlayerInventory] All items cleared!");
+        return UsedSlots >= maxSlots;
+    }
+    
+    public bool IsEmpty()
+    {
+        return inventory.Count == 0;
+    }
+    
+    public void SetMaxSlots(int slots)
+    {
+        maxSlots = Mathf.Max(1, slots);
+        Debug.Log($"[PlayerInventory] Max slots set to {maxSlots}");
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // SAVE/LOAD SUPPORT
+    // ═══════════════════════════════════════════════════════════════
+    
+    [System.Serializable]
+    public class InventorySaveData
+    {
+        public ItemType[] itemTypes;
+        public int[] amounts;
+        public int maxSlots;
+    }
+    
+    public InventorySaveData GetSaveData()
+    {
+        InventorySaveData data = new InventorySaveData();
+        data.maxSlots = maxSlots;
+        
+        List<ItemType> types = new List<ItemType>();
+        List<int> amounts = new List<int>();
+        
+        foreach (var kvp in inventory)
+        {
+            types.Add(kvp.Key);
+            amounts.Add(kvp.Value);
+        }
+        
+        data.itemTypes = types.ToArray();
+        data.amounts = amounts.ToArray();
+        
+        return data;
+    }
+    
+    public void LoadSaveData(InventorySaveData data)
+    {
+        if (data == null)
+        {
+            Debug.LogWarning("[PlayerInventory] Cannot load null save data!");
+            return;
+        }
+        
+        ClearInventory();
+        
+        maxSlots = data.maxSlots;
+        
+        if (data.itemTypes != null && data.amounts != null)
+        {
+            int count = Mathf.Min(data.itemTypes.Length, data.amounts.Length);
+            
+            for (int i = 0; i < count; i++)
+            {
+                inventory[data.itemTypes[i]] = data.amounts[i];
+            }
+        }
+        
+        GameEvents.InventoryChanged();
+        
+        Debug.Log($"[PlayerInventory] Loaded {inventory.Count} items from save data");
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // DEBUG
+    // ═══════════════════════════════════════════════════════════════
+    
+    private void OnGUI()
+    {
+        if (!Debug.isDebugBuild) return;
+        
+        GUILayout.BeginArea(new Rect(Screen.width - 310, 420, 300, 300));
+        GUILayout.Label("=== Player Inventory ===");
+        GUILayout.Label($"Slots: {UsedSlots}/{maxSlots}");
+        GUILayout.Label("");
+        GUILayout.Label("Items:");
+        
+        if (inventory.Count == 0)
+        {
+            GUILayout.Label("  Empty");
+        }
+        else
+        {
+            foreach (var kvp in inventory)
+            {
+                GUILayout.Label($"  {kvp.Key}: {kvp.Value}");
+            }
+        }
+        
+        GUILayout.EndArea();
     }
 }
